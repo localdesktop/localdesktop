@@ -26,7 +26,7 @@ jni = "0.21.1"
 log = "0.4"
 mockall = "0.13.1"
 tar = "0.4.43"
-wayland-server = "0.31.6"
+wayland-server = "0.31.7"
 xkbcommon-rs = "0.1.0"
 android_logger = { version = "0.14", default-features = false }
 eframe = { version = "0.30", default-features = false, features = [

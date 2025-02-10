@@ -29,7 +29,7 @@ tar = "0.4.43"
 wayland-server = "0.31.6"
 xkbcommon-rs = "0.1.0"
 android_logger = { version = "0.14", default-features = false }
-eframe = { version = "0.30", default-features = false, features = [
+eframe = { version = "0.31", default-features = false, features = [
     "glow",
     "android-native-activity",
     "default_fonts",

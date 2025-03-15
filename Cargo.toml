@@ -20,7 +20,7 @@ xz2 = "0.1.7"
 
 [target.'cfg(not(target_os = "android"))'.dependencies]
 xbuild = "0.2.0"
-clap = "4.5.27"
+clap = "4.5.32"
 
 [target.'cfg(target_os = "android")'.dependencies]
 jni = "0.21.1"

@@ -25,7 +25,7 @@ clap = "4.5.27"
 jni = "0.21.1"
 log = "0.4"
 mockall = "0.13.1"
-tar = "0.4.43"
+tar = "0.4.44"
 android_logger = { version = "0.14", default-features = false }
 winit = { version = "0.30.9", features = [
     "android-native-activity",

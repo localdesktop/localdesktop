@@ -2,7 +2,7 @@
 
 Local Desktop helps you run a desktop Linux environment on your Android device.
 
-> Local Desktop is a Rust rewrite of the original [Polar Bear](https://github.com/local-desktop/polar-bear) project, which was written in Kotlin and C++. The aim of this rewrite is to make it more stable, portable, and able to do the development work on Android.
+> Local Desktop is a Rust rewrite of the original [Polar Bear](https://github.com/localdesktop/polar-bear) project, which was written in Kotlin and C++. The aim of this rewrite is to make it more stable, portable, and able to do the development work on Android.
 
 ## How it works
 
@@ -51,4 +51,4 @@ Recommended setup:
 
 > **Tip**: You can debug the app on either a physical device or a virtual device.
 
-For more instructions on how to work on this project, please visit the [Developer Manual](https://local-desktop.github.io/docs/developer/how-it-works).
+For more instructions on how to work on this project, please visit the [Developer Manual](https://localdesktop.github.io/docs/developer/how-it-works).

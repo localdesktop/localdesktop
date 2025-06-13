@@ -78,7 +78,7 @@ fn run_integration_tests_on_android() {
         cargo.exec().expect("Failed to execute cargo command");
 
         let executable_tests_output = target_dir.join("aarch64-linux-android/debug/deps");
-        // Look for the executable file, whose name starts with `local_desktop-` and has no extension
+        // Look for the executable file, whose name starts with `localdesktop-` and has no extension
         let executable_test_binary = executable_tests_output
             .read_dir()
             .expect(&format!(
@@ -88,7 +88,7 @@ fn run_integration_tests_on_android() {
             .map(|entry| entry.expect("Failed to read entry").file_name())
             .find(|file_name| {
                 let name = file_name.to_string_lossy();
-                name.starts_with("local_desktop-") && !name.contains(".")
+                name.starts_with("localdesktop-") && !name.contains(".")
             });
         let executable_test_binary: String = executable_test_binary
             .expect(&format!(
@@ -123,7 +123,7 @@ fn run_integration_tests_on_android() {
                 .unwrap_or_else(|_| std::path::PathBuf::from("/tmp"));
 
             // Use the new URL from config
-            let tar_xz_url = local_desktop::utils::config::ARCH_FS_ARCHIVE;
+            let tar_xz_url = localdesktop::utils::config::ARCH_FS_ARCHIVE;
             let tar_xz_filename = tar_xz_url.split('/').last().unwrap();
             let tar_xz_path = tmpdir.join(tar_xz_filename);
 

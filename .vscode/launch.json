@@ -13,7 +13,7 @@
       "preLaunchTask": "[Android] Build",
       "target": "select",
       "mode": "native",
-      "apkPath": "${workspaceFolder}/target/x/debug/android/local-desktop.apk",
+      "apkPath": "${workspaceFolder}/target/x/debug/android/localdesktop.apk",
       "launchActivity": "android.app.NativeActivity"
     }
   ]

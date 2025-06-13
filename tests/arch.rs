@@ -1,6 +1,6 @@
 #[cfg(target_os = "android")]
 mod arch_run {
-    use local_desktop::proot::process::ArchProcess;
+    use localdesktop::proot::process::ArchProcess;
 
     #[test]
     fn compositor_should_has_an_output_global() {

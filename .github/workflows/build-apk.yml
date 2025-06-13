@@ -65,7 +65,7 @@ jobs:
 
       - name: Rename APK with version
         run: |
-          mv target/x/release/android/local-desktop.apk target/x/release/android/local-desktop-${{ steps.extract_version.outputs.version }}.apk
+          mv target/x/release/android/localdesktop.apk target/x/release/android/localdesktop-${{ steps.extract_version.outputs.version }}.apk
 
       - name: Create GitHub Release
         if: github.ref_type == 'tag'
@@ -73,6 +73,6 @@ jobs:
         with:
           name: Local Desktop v${{ steps.extract_version.outputs.version }}
           tag_name: v${{ steps.extract_version.outputs.version }}
-          files: target/x/release/android/local-desktop-${{ steps.extract_version.outputs.version }}.apk
+          files: target/x/release/android/localdesktop-${{ steps.extract_version.outputs.version }}.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

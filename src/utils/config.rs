@@ -22,7 +22,7 @@ pub const PACMAN_CHECKING_COMMAND: &str =
 
 pub const PACMAN_INSTALL_PACKAGES: &str = "xorg-xwayland xfce4 onboard";
 
-pub const CONFIG_FILE: &str = "/etc/local-desktop/local-desktop.toml";
+pub const CONFIG_FILE: &str = "/etc/localdesktop/localdesktop.toml";
 
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct Config {
@@ -53,7 +53,7 @@ pub fn parse_config() -> Config {
 
 pub fn save_config(config: Config) {
     // Create config directory if it doesn't exist
-    let config_dir = format!("{}/etc/local-desktop", ARCH_FS_ROOT);
+    let config_dir = format!("{}/etc/localdesktop", ARCH_FS_ROOT);
     fs::create_dir_all(&config_dir).pb_expect("Failed to create config directory");
 
     // Create and write config file

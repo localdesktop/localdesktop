@@ -232,20 +232,20 @@ fn setup_firefox_config(_: &SetupOptions) -> StageOutput {
     fs::create_dir_all(&pref_dir).pb_expect("Failed to create Firefox pref directory");
 
     // Create autoconfig.js in defaults/pref
-    let autoconfig_js = r#"pref("general.config.filename", "local-desktop.cfg");
+    let autoconfig_js = r#"pref("general.config.filename", "localdesktop.cfg");
 pref("general.config.obscure_value", 0);
 "#;
 
     fs::write(format!("{}/autoconfig.js", pref_dir), autoconfig_js)
         .pb_expect("Failed to write Firefox autoconfig.js");
 
-    // Create local-desktop.cfg in the Firefox root directory
+    // Create localdesktop.cfg in the Firefox root directory
     let firefox_cfg = r#"// Auto updated by Local Desktop on each startup, do not edit manually
 defaultPref("media.cubeb.sandbox", false);
 defaultPref("security.sandbox.content.level", 0);
 "#; // It is required that the first line of this file is a comment, even if you have nothing to comment. Docs: https://support.mozilla.org/en-US/kb/customizing-firefox-using-autoconfig
 
-    fs::write(format!("{}/local-desktop.cfg", firefox_root), firefox_cfg)
+    fs::write(format!("{}/localdesktop.cfg", firefox_root), firefox_cfg)
         .pb_expect("Failed to write Firefox configuration");
 
     None

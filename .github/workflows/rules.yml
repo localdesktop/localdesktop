@@ -12,6 +12,9 @@ on:
     branches:
       - main
 
+permissions:
+  contents: write
+
 jobs:
   check-version-bump:
     if: github.event_name == 'pull_request'

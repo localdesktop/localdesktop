@@ -2884,7 +2884,7 @@ checksum = "4ee93343901ab17bd981295f2cf0026d4ad018c7c31ba84549a4ddbb47a45104"
 
 [[package]]
 name = "localdesktop"
-version = "1.0.5"
+version = "1.0.6"
 dependencies = [
  "android_logger",
  "clap",
@@ -2893,6 +2893,7 @@ dependencies = [
  "libloading",
  "log 0.4.27",
  "mockall",
+ "pathdiff",
  "reqwest 0.12.20",
  "sentry",
  "serde",
@@ -3631,6 +3632,12 @@ name = "path-slash"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1e91099d4268b0e11973f036e885d652fb0b21fedcf69738c627f94db6a44f42"
+
+[[package]]
+name = "pathdiff"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "df94ce210e5bc13cb6651479fa48d14f601d9858cfe0467f43ae157023b938d3"
 
 [[package]]
 name = "pem"

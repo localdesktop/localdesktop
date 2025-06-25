@@ -15,7 +15,7 @@
       "type": "shell",
       "label": "[Android] Logcat",
       "command": "sh",
-      "args": ["-c", "adb logcat -c && adb logcat -e app.polarbear"]
+      "args": ["-c", "adb logcat -c && adb logcat -s RustStdoutStderr"]
     }
   ]
 }

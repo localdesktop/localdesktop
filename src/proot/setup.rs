@@ -3,15 +3,18 @@ use crate::{
     app::build::{PolarBearBackend, WaylandBackend, WebviewBackend},
     utils::{
         application_context::get_application_context,
-        config::{self},
+        config::{ARCH_FS_ARCHIVE, ARCH_FS_ROOT, PACMAN_CHECKING_COMMAND, PACMAN_INSTALL_PACKAGES},
         logging::PolarBearExpectation,
     },
     wayland::compositor::Compositor,
 };
+use pathdiff::diff_paths;
 use smithay::utils::Clock;
 use std::{
     fs::{self, File},
     io::{Read, Write},
+    os::unix::fs::{symlink, PermissionsExt},
+    path::{Path, PathBuf},
     sync::{
         mpsc::{self, Sender},
         Arc, Mutex,
@@ -46,7 +49,7 @@ type SetupStage = Box<dyn Fn(&SetupOptions) -> StageOutput + Send>;
 type StageOutput = Option<JoinHandle<()>>;
 
 fn setup_fake_sysdata_stage(options: &SetupOptions) -> StageOutput {
-    let fs_root = std::path::Path::new(config::ARCH_FS_ROOT);
+    let fs_root = Path::new(ARCH_FS_ROOT);
     let mpsc_sender = options.mpsc_sender.clone();
 
     if !fs_root.join("proc/.version").exists() {
@@ -65,7 +68,6 @@ fn setup_fake_sysdata_stage(options: &SetupOptions) -> StageOutput {
             // Set permissions - only try to set permissions if we're on Unix and have the capability
             #[cfg(unix)]
             {
-                use std::os::unix::fs::PermissionsExt;
                 // Try to set permissions, but don't fail if we can't
                 let _ =
                     fs::set_permissions(fs_root.join("proc"), fs::Permissions::from_mode(0o700));
@@ -88,7 +90,7 @@ fn setup_fake_sysdata_stage(options: &SetupOptions) -> StageOutput {
                 ];
 
             for (path, content) in proc_files {
-                fs::write(fs_root.join(path), content)
+                let _ = fs::write(fs_root.join(path), content)
                     .pb_expect(&format!("Permission denied while writing to {}", path));
             }
         }));
@@ -99,7 +101,7 @@ fn setup_fake_sysdata_stage(options: &SetupOptions) -> StageOutput {
 fn setup_arch_fs(options: &SetupOptions) -> StageOutput {
     let context = get_application_context().pb_expect("Failed to get application context");
     let temp_file = context.data_dir.join("archlinux-fs.tar.xz");
-    let fs_root = std::path::Path::new(config::ARCH_FS_ROOT);
+    let fs_root = Path::new(ARCH_FS_ROOT);
     let extracted_dir = context.data_dir.join("archlinux-aarch64");
     let mpsc_sender = options.mpsc_sender.clone();
 
@@ -116,7 +118,7 @@ fn setup_arch_fs(options: &SetupOptions) -> StageOutput {
                         ))
                         .pb_expect("Failed to send log message");
 
-                    let response = reqwest::blocking::get(config::ARCH_FS_ARCHIVE)
+                    let response = reqwest::blocking::get(ARCH_FS_ARCHIVE)
                         .pb_expect("Failed to download Arch Linux FS");
 
                     let total_size = response.content_length().unwrap_or(0);
@@ -162,7 +164,7 @@ fn setup_arch_fs(options: &SetupOptions) -> StageOutput {
                     .pb_expect("Failed to send log message");
 
                 // Ensure the extracted directory is clean
-                fs::remove_dir_all(&extracted_dir).unwrap_or(());
+                let _ = fs::remove_dir_all(&extracted_dir);
 
                 // Extract tar file directly to the final destination
                 let tar_file = File::open(&temp_file)
@@ -173,8 +175,8 @@ fn setup_arch_fs(options: &SetupOptions) -> StageOutput {
                 // Try to extract, if it fails, remove temp file and restart download
                 if let Err(e) = archive.unpack(context.data_dir.clone()) {
                     // Clean up the failed extraction
-                    fs::remove_dir_all(&extracted_dir).unwrap_or(());
-                    fs::remove_file(&temp_file).unwrap_or(());
+                    let _ = fs::remove_dir_all(&extracted_dir);
+                    let _ = fs::remove_file(&temp_file);
 
                     mpsc_sender
                         .send(SetupMessage::Error(format!(
@@ -245,19 +247,19 @@ fn install_dependencies(options: &SetupOptions) -> StageOutput {
 
 fn setup_firefox_config(_: &SetupOptions) -> StageOutput {
     // Create the Firefox root directory if it doesn't exist
-    let firefox_root = format!("{}/usr/lib/firefox", crate::utils::config::ARCH_FS_ROOT);
-    fs::create_dir_all(&firefox_root).pb_expect("Failed to create Firefox root directory");
+    let firefox_root = format!("{}/usr/lib/firefox", ARCH_FS_ROOT);
+    let _ = fs::create_dir_all(&firefox_root).pb_expect("Failed to create Firefox root directory");
 
     // Create the defaults/pref directory
     let pref_dir = format!("{}/defaults/pref", firefox_root);
-    fs::create_dir_all(&pref_dir).pb_expect("Failed to create Firefox pref directory");
+    let _ = fs::create_dir_all(&pref_dir).pb_expect("Failed to create Firefox pref directory");
 
     // Create autoconfig.js in defaults/pref
     let autoconfig_js = r#"pref("general.config.filename", "localdesktop.cfg");
 pref("general.config.obscure_value", 0);
 "#;
 
-    fs::write(format!("{}/autoconfig.js", pref_dir), autoconfig_js)
+    let _ = fs::write(format!("{}/autoconfig.js", pref_dir), autoconfig_js)
         .pb_expect("Failed to write Firefox autoconfig.js");
 
     // Create localdesktop.cfg in the Firefox root directory
@@ -266,9 +268,52 @@ defaultPref("media.cubeb.sandbox", false);
 defaultPref("security.sandbox.content.level", 0);
 "#; // It is required that the first line of this file is a comment, even if you have nothing to comment. Docs: https://support.mozilla.org/en-US/kb/customizing-firefox-using-autoconfig
 
-    fs::write(format!("{}/localdesktop.cfg", firefox_root), firefox_cfg)
+    let _ = fs::write(format!("{}/localdesktop.cfg", firefox_root), firefox_cfg)
         .pb_expect("Failed to write Firefox configuration");
 
+    None
+}
+
+fn fix_xkb_symlink(options: &SetupOptions) -> StageOutput {
+    let fs_root = Path::new(ARCH_FS_ROOT);
+    let xkb_path = fs_root.join("usr/share/X11/xkb");
+    let mpsc_sender = options.mpsc_sender.clone();
+
+    if let Ok(meta) = fs::symlink_metadata(&xkb_path) {
+        if meta.file_type().is_symlink() {
+            if let Ok(target) = fs::read_link(&xkb_path) {
+                if target.is_absolute() {
+                    log::info!(
+                        "Absolute symlink target detected: {} -> {}. This is a problem because libxkbcommon is loaded in NDK, whose / is not Arch FS root!",
+                        xkb_path.display(),
+                        target.display()
+                    );
+                    // Compute the relative path from /usr/share/X11/xkb to /usr/share/xkeyboard-config-2
+                    // Both are inside the chroot, so strip the fs_root prefix
+                    let xkb_inside = Path::new("/usr/share/X11/xkb");
+                    let target_inside = Path::new("/usr/share/xkeyboard-config-2");
+                    let rel_target = diff_paths(target_inside, xkb_inside.parent().unwrap())
+                        .unwrap_or_else(|| target_inside.to_path_buf());
+                    log::info!(
+                        "Fixing with new relative symlink: {} -> {}",
+                        xkb_path.display(),
+                        rel_target.display()
+                    );
+                    // Remove the old symlink
+                    let _ = fs::remove_file(&xkb_path);
+                    // Create the new relative symlink
+                    if let Err(e) = symlink(&rel_target, &xkb_path) {
+                        mpsc_sender
+                            .send(SetupMessage::Error(format!(
+                                "Failed to create relative symlink for xkb: {}",
+                                e
+                            )))
+                            .unwrap_or(());
+                    }
+                }
+            }
+        }
+    }
     None
 }
 
@@ -277,8 +322,8 @@ pub fn setup(android_app: AndroidApp) -> PolarBearBackend {
     let progress = Arc::new(Mutex::new(0));
 
     let options = SetupOptions {
-        install_packages: config::PACMAN_INSTALL_PACKAGES.to_string(),
-        checking_command: config::PACMAN_CHECKING_COMMAND.to_string(),
+        install_packages: PACMAN_INSTALL_PACKAGES.to_string(),
+        checking_command: PACMAN_CHECKING_COMMAND.to_string(),
         android_app,
         mpsc_sender: sender.clone(),
     };
@@ -288,6 +333,7 @@ pub fn setup(android_app: AndroidApp) -> PolarBearBackend {
         Box::new(setup_fake_sysdata_stage), // Step 2. Setup fake system data
         Box::new(install_dependencies),     // Step 3. Install dependencies
         Box::new(setup_firefox_config),     // Step 4. Setup Firefox config
+        Box::new(fix_xkb_symlink),          // Step 5. Fix xkb symlink (last)
     ];
 
     let handle_stage_error = |e: Box<dyn std::any::Any + Send>, sender: &Sender<SetupMessage>| {

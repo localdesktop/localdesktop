@@ -38,7 +38,7 @@ winit = { version = "0.30.9", features = [
 ] }
 wayland-protocols = "0.32.6"
 khronos-egl = { version = "6.0.0", features = ["dynamic"] }
-libloading = "0.8.6"
+libloading = "0.8.8"
 websocket = { version = "0.27.1", default-features = false, features = [
     "sync",
 ] }

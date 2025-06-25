@@ -12,8 +12,6 @@ on:
     branches:
       - main
 
-permissions:
-  contents: write
 
 jobs:
   check-version-bump:
@@ -55,6 +53,8 @@ jobs:
           echo "Error: Version in Cargo.toml was not changed in this PR. As a convention, all pull requests to main must change the version in Cargo.toml."
             exit 1
           fi
+    permissions:
+      contents: write
 
   create-tag:
     if: github.event_name == 'push'
@@ -84,3 +84,5 @@ jobs:
 
           git tag "$TAG"
           git push origin "$TAG"
+    permissions:
+      checks: write

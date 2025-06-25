@@ -12,43 +12,58 @@ on:
     branches:
       - main
 
+
 jobs:
   check-version-bump:
+    name: Check Version Bump
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code with history
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
-          fetch-depth: 2
+          fetch-depth: 0
 
       - name: Extract base version from Cargo.toml
         id: base_version
         run: |
-          git show origin/main:Cargo.toml | grep '^version =' | head -n1 | sed -E 's/version = "(.*)"/\1/' > base_version.txt
-          echo "::set-output name=version::$(cat base_version.txt)"
+          BASE_VERSION=$(git show origin/main:Cargo.toml | grep -E '^version\s*=' | head -n1 | sed -E 's/^version\s*=\s*"([^"]+)".*/\1/')
+          if [ -z "$BASE_VERSION" ]; then
+            echo "Error: Could not extract base version"
+            exit 1
+          fi
+          echo "version=$BASE_VERSION" >> $GITHUB_OUTPUT
+          echo "Base version extracted: $BASE_VERSION"
 
       - name: Extract head version from Cargo.toml
         id: head_version
         run: |
-          grep '^version =' Cargo.toml | head -n1 | sed -E 's/version = "(.*)"/\1/' > head_version.txt
-          echo "::set-output name=version::$(cat head_version.txt)"
+          HEAD_VERSION=$(grep -E '^version\s*=' Cargo.toml | head -n1 | sed -E 's/^version\s*=\s*"([^"]+)".*/\1/')
+          if [ -z "$HEAD_VERSION" ]; then
+            echo "Error: Could not extract head version"
+            exit 1
+          fi
+          echo "version=$HEAD_VERSION" >> $GITHUB_OUTPUT
+          echo "Head version extracted: $HEAD_VERSION"
 
       - name: Check if version was bumped
         run: |
           echo "Base version: ${{ steps.base_version.outputs.version }}"
           echo "Head version: ${{ steps.head_version.outputs.version }}"
           if [ "${{ steps.base_version.outputs.version }}" = "${{ steps.head_version.outputs.version }}" ]; then
-            echo "Error: Version in Cargo.toml was not changed in this PR."
+          echo "Error: Version in Cargo.toml was not changed in this PR. As a convention, all pull requests to main must change the version in Cargo.toml."
             exit 1
           fi
+    permissions:
+      checks: write
 
   create-tag:
+    name: Create Tag
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Get version from Cargo.toml
         id: get_version
@@ -71,3 +86,5 @@ jobs:
 
           git tag "$TAG"
           git push origin "$TAG"
+    permissions:
+      contents: write

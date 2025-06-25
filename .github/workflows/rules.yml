@@ -71,7 +71,7 @@ jobs:
       - name: Create and push tag
         env:
           TAG: v${{ steps.get_version.outputs.version }}
-          PAT: ${{ secrets.PAT_FOR_TAG_PUSH }}
+          PAT: ${{ secrets.PAT }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"

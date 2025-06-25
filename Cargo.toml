@@ -30,7 +30,7 @@ clap = "4.5.27"
 [target.'cfg(target_os = "android")'.dependencies]
 jni = "0.21.1"
 mockall = "0.13.1"
-toml = "0.8.12"
+toml = "0.8.23"
 android_logger = { version = "0.14", default-features = false }
 winit = { version = "0.30.9", features = [
     "android-native-activity",

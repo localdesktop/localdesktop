@@ -1,0 +1,73 @@
+# Local Desktop Convention:
+# - Direct pushes to main are forbidden.
+# - Pull requests to main must change Cargo.toml version.
+# - A new tag with that version is automatically released on merge.
+name: Local Desktop Convention
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+jobs:
+  check-version-bump:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code with history
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 2
+
+      - name: Extract base version from Cargo.toml
+        id: base_version
+        run: |
+          git show origin/main:Cargo.toml | grep '^version =' | head -n1 | sed -E 's/version = "(.*)"/\1/' > base_version.txt
+          echo "::set-output name=version::$(cat base_version.txt)"
+
+      - name: Extract head version from Cargo.toml
+        id: head_version
+        run: |
+          grep '^version =' Cargo.toml | head -n1 | sed -E 's/version = "(.*)"/\1/' > head_version.txt
+          echo "::set-output name=version::$(cat head_version.txt)"
+
+      - name: Check if version was bumped
+        run: |
+          echo "Base version: ${{ steps.base_version.outputs.version }}"
+          echo "Head version: ${{ steps.head_version.outputs.version }}"
+          if [ "${{ steps.base_version.outputs.version }}" = "${{ steps.head_version.outputs.version }}" ]; then
+            echo "Error: Version in Cargo.toml was not changed in this PR."
+            exit 1
+          fi
+
+  create-tag:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Get version from Cargo.toml
+        id: get_version
+        run: |
+          VERSION=$(grep '^version =' Cargo.toml | head -n1 | sed -E 's/version = "(.*)"/\1/')
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Create and push tag
+        env:
+          TAG: v${{ steps.get_version.outputs.version }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists, skipping."
+            exit 0
+          fi
+
+          git tag "$TAG"
+          git push origin "$TAG"

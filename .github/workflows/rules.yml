@@ -49,7 +49,7 @@ jobs:
           echo "Base version: ${{ steps.base_version.outputs.version }}"
           echo "Head version: ${{ steps.head_version.outputs.version }}"
           if [ "${{ steps.base_version.outputs.version }}" = "${{ steps.head_version.outputs.version }}" ]; then
-            echo "Error: Version in Cargo.toml was not changed in this PR."
+          echo "Error: Version in Cargo.toml was not changed in this PR. As a convention, all pull requests to main must change the version in Cargo.toml."
             exit 1
           fi
 

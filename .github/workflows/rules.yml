@@ -12,7 +12,6 @@ on:
     branches:
       - main
 
-
 jobs:
   check-version-bump:
     name: Check Version Bump
@@ -54,8 +53,6 @@ jobs:
           echo "Error: Version in Cargo.toml was not changed in this PR. As a convention, all pull requests to main must change the version in Cargo.toml."
             exit 1
           fi
-    permissions:
-      checks: write
 
   create-tag:
     name: Create Tag
@@ -74,7 +71,7 @@ jobs:
       - name: Create and push tag
         env:
           TAG: v${{ steps.get_version.outputs.version }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PAT: ${{ secrets.PAT_FOR_TAG_PUSH }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -85,6 +82,4 @@ jobs:
           fi
 
           git tag "$TAG"
-          git push origin "$TAG"
-    permissions:
-      contents: write
+          git push https://x-access-token:${PAT}@github.com/${GITHUB_REPOSITORY}.git "$TAG"

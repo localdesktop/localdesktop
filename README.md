@@ -20,7 +20,7 @@ _Proof of Concept: A Pixel Tablet running the XFCE desktop environment inside a 
 
 ```bash
 cargo install xbuild
-x build --platform android --arch arm64
+x build --release --platform android --arch arm64 --format apk
 ```
 
 Alternatively, trigger the default build task by pressing `Ctrl+Shift+B`.

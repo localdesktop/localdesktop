@@ -14,6 +14,15 @@ android:
       label: "Local Desktop"
       extract_native_libs: true # Required for proot invocations
       use_cleartext_traffic: true # Required for connecting to ws://127.0.0.1, see assets/setup-progress.html
+      meta_data:
+        - name: com.samsung.android.dex.launchwidth
+          value: 0
+        - name: com.samsung.android.dex.launchheight
+          value: 0
+        - name: com.samsung.android.sdk.multiwindow.dex.launchwidth
+          value: 0
+        - name: com.samsung.android.sdk.multiwindow.dex.launchheight
+          value: 0
     uses_permission:
       - name: android.permission.INTERNET
       - name: android.permission.ACCESS_NETWORK_STATE

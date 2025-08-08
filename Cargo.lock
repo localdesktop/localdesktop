@@ -1203,7 +1203,7 @@ checksum = "4ee93343901ab17bd981295f2cf0026d4ad018c7c31ba84549a4ddbb47a45104"
 
 [[package]]
 name = "localdesktop"
-version = "1.2.6"
+version = "1.2.7"
 dependencies = [
  "android_logger",
  "jni",

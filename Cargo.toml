@@ -45,7 +45,6 @@ smithay = { version = "0.5.0", default-features = false, features = [
     "wayland-server",
     "renderer_glow",
     "wayland_frontend",
-    "desktop",
 ] }
 
 [target.'cfg(not(target_os = "android"))'.dependencies] # Deps used only for setting up cross testing

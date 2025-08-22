@@ -1,12 +1,9 @@
 use super::bind::bind_socket;
-use crate::{
-    android::backend::wayland::element::WindowElement, core::logging::PolarBearExpectation,
-};
+use crate::core::logging::PolarBearExpectation;
 use smithay::{
     backend::renderer::utils::on_commit_buffer_handler,
     delegate_compositor, delegate_data_device, delegate_output, delegate_seat, delegate_shm,
     delegate_xdg_shell,
-    desktop::Space,
     input::{self, keyboard::KeyboardHandle, touch::TouchHandle, Seat, SeatHandler, SeatState},
     output::Output,
     reexports::{
@@ -63,7 +60,6 @@ pub struct State {
     pub data_device_state: DataDeviceState,
     pub seat_state: SeatState<Self>,
     pub size: Size<i32, Logical>,
-    pub space: Space<WindowElement>,
 }
 
 impl BufferHandler for State {
@@ -223,7 +219,6 @@ impl Compositor {
             data_device_state: DataDeviceState::new::<State>(&dh),
             seat_state,
             size: (1920, 1080).into(),
-            space: Space::default(),
         };
 
         Ok(Compositor {

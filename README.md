@@ -25,6 +25,12 @@ x build --release --platform android --arch arm64 --format apk
 
 Alternatively, trigger the default build task by pressing `Ctrl+Shift+B`.
 
+You can find the output APK in:
+
+```bash
+open target/x/release/android/gradle/app/build/outputs/apk/debug/
+```
+
 ### How to develop
 
 Recommended setup:

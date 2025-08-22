@@ -1,6 +1,5 @@
 pub mod bind;
 mod compositor;
-mod element;
 mod event_centralizer;
 mod event_handler;
 mod input;

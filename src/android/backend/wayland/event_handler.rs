@@ -1,14 +1,9 @@
 use crate::{
     android::backend::wayland::{
         compositor::{send_frames_surface_tree, ClientState, State},
-        element::WindowElement,
         CentralizedEvent, WaylandBackend,
     },
     core::logging::PolarBearExpectation,
-};
-use smithay::backend::input::{
-    AbsolutePositionEvent, Axis, Event, InputEvent, KeyboardKeyEvent, PointerAxisEvent,
-    PointerButtonEvent, TouchEvent,
 };
 use smithay::backend::renderer::element::surface::{
     render_elements_from_surface_tree, WaylandSurfaceRenderElement,
@@ -17,12 +12,18 @@ use smithay::backend::renderer::element::Kind;
 use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::backend::renderer::utils::draw_render_elements;
 use smithay::backend::renderer::{Color32F, Frame, Renderer};
-use smithay::desktop::Space;
 use smithay::input::keyboard::FilterResult;
 use smithay::input::{pointer, touch};
 use smithay::reexports::wayland_server::protocol::wl_pointer::ButtonState;
-use smithay::utils::{Logical, Point, Rectangle, Transform, SERIAL_COUNTER};
+use smithay::utils::{Rectangle, Transform, SERIAL_COUNTER};
 use smithay::wayland::shell::xdg::ToplevelSurface;
+use smithay::{
+    backend::input::{
+        AbsolutePositionEvent, Axis, Event, InputEvent, KeyboardKeyEvent, PointerAxisEvent,
+        PointerButtonEvent, TouchEvent,
+    },
+    output::{Mode, Scale},
+};
 use std::sync::Arc;
 use winit::event_loop::ActiveEventLoop;
 
@@ -36,32 +37,6 @@ fn get_surface(state: &State) -> Option<ToplevelSurface> {
         .iter()
         .next()
         .cloned()
-}
-
-fn clamp_coords(space: &Space<WindowElement>, pos: Point<f64, Logical>) -> Point<f64, Logical> {
-    if space.outputs().next().is_none() {
-        return pos;
-    }
-
-    let (pos_x, pos_y) = pos.into();
-    let max_x = space
-        .outputs()
-        .fold(0, |acc, o| acc + space.output_geometry(o).unwrap().size.w);
-    let clamped_x = pos_x.clamp(0.0, max_x as f64);
-    let max_y = space
-        .outputs()
-        .find(|o| {
-            let geo = space.output_geometry(o).unwrap();
-            geo.contains((clamped_x as i32, 0))
-        })
-        .map(|o| space.output_geometry(o).unwrap().size.h);
-
-    if let Some(max_y) = max_y {
-        let clamped_y = pos_y.clamp(0.0, max_y as f64);
-        (clamped_x, clamped_y).into()
-    } else {
-        (clamped_x, pos_y).into()
-    }
 }
 
 pub fn handle(event: CentralizedEvent, backend: &mut WaylandBackend, event_loop: &ActiveEventLoop) {
@@ -239,32 +214,14 @@ pub fn handle(event: CentralizedEvent, backend: &mut WaylandBackend, event_loop:
             InputEvent::PointerMotionAbsolute { event, .. } => {
                 let compositor = &mut backend.compositor;
                 let pointer = compositor.pointer.clone();
-                let space = &compositor.state.space;
                 let serial = SERIAL_COUNTER.next_serial();
-
-                let max_x = space
-                    .outputs()
-                    .fold(0, |acc, o| acc + space.output_geometry(o).unwrap().size.w);
-
-                let max_h_output = space
-                    .outputs()
-                    .max_by_key(|o| space.output_geometry(o).unwrap().size.h)
-                    .unwrap();
-
-                let max_y = space.output_geometry(max_h_output).unwrap().size.h;
-
-                let mut pointer_location =
-                    (event.x_transformed(max_x), event.y_transformed(max_y)).into();
-
-                // clamp to screen limits
-                pointer_location = clamp_coords(space, pointer_location);
 
                 if let Some(surface) = get_surface(&compositor.state) {
                     pointer.motion(
                         &mut compositor.state,
                         Some((surface.wl_surface().clone(), (0f64, 0f64).into())),
                         &pointer::MotionEvent {
-                            location: pointer_location,
+                            location: (event.x(), event.y()).into(),
                             serial,
                             time: event.time_msec(),
                         },
@@ -346,6 +303,24 @@ pub fn handle(event: CentralizedEvent, backend: &mut WaylandBackend, event_loop:
             }
             _ => {}
         },
+        CentralizedEvent::Resized { size, scale_factor } => {
+            if let Some(output) = &backend.compositor.output {
+                // set the preferred mode
+                output.change_current_state(
+                    Some(Mode {
+                        size: size.into(),
+                        refresh: 60000,
+                    }), // the resolution mode,
+                    Some(Transform::Normal), // global screen transformation
+                    Some(Scale::Fractional(scale_factor)), // global screen scaling factor
+                    Some((0, 0).into()),     // output position
+                );
+            }
+
+            if let Some(surface) = get_surface(&backend.compositor.state) {
+                surface.xdg_toplevel().configure(size.w, size.h, vec![]);
+            }
+        }
         _ => (),
     }
 }

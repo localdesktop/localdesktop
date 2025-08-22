@@ -1,3 +1,5 @@
+use std::thread;
+
 use super::build::{PolarBearApp, PolarBearBackend};
 use crate::android::{
     backend::wayland::{bind, centralize, handle, State},
@@ -19,12 +21,15 @@ impl ApplicationHandler for PolarBearApp {
             PolarBearBackend::WebView(ref mut backend) => {
                 let port = backend.socket_port;
                 let url = format!("file:///android_asset/setup-progress.html?port={}", port);
-                run_in_jvm(
-                    move |env, app| {
-                        show_webview_popup(env, app, &url);
-                    },
-                    self.frontend.android_app.clone(),
-                );
+                let android_app = self.frontend.android_app.clone();
+                thread::spawn(move || {
+                    run_in_jvm(
+                        move |env, app| {
+                            show_webview_popup(env, app, &url);
+                        },
+                        android_app,
+                    );
+                });
             }
             PolarBearBackend::Wayland(ref mut backend) => {
                 // Initialize the Wayland backend
@@ -61,13 +66,7 @@ impl ApplicationHandler for PolarBearApp {
                     Some(Scale::Fractional(scale_factor)), // global screen scaling factor
                     Some((0, 0).into()),     // output position
                 );
-                // set the preferred mode
-                output.set_preferred(Mode {
-                    size: size.into(),
-                    refresh: 60000,
-                });
 
-                backend.compositor.state.space.map_output(&output, (0, 0));
                 backend.compositor.output.replace(output);
 
                 launch();
@@ -83,9 +82,5 @@ impl ApplicationHandler for PolarBearApp {
             // Handle the centralized events
             handle(event, backend, event_loop);
         }
-    }
-
-    fn exiting(&mut self, event_loop: &ActiveEventLoop) {
-        println!("{:?}", event_loop);
     }
 }

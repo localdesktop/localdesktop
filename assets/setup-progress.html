@@ -43,11 +43,11 @@
             v-for="log in logs"
             :key="log.id"
             :style="{
-                      display: 'flex',
-                      flex: 'none',
-                      marginBottom: '5px',
-                      color: log.isError ? '#ff0000' : 'white'
-                    }"
+              display: 'flex',
+              flex: 'none',
+              marginBottom: '5px',
+              color: log.isError ? '#ff0000' : 'white'
+            }"
           >
             <div
               style="
@@ -83,14 +83,14 @@
       >
         <div
           :style="{
-                    position: 'absolute',
-                    top: 0,
-                    left: 0,
-                    height: '100%',
-                    width: progress + '%',
-                    backgroundColor: progressBarColor,
-                    zIndex: 0
-                  }"
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            height: '100%',
+            width: progress + '%',
+            backgroundColor: progressBarColor,
+            zIndex: 0
+          }"
         ></div>
         <span
           style="

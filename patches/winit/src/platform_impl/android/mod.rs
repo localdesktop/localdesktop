@@ -7,7 +7,7 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use android_activity::input::{
-    self, Button, InputEvent, KeyAction, Keycode, MotionAction, Source, ToolType,
+    self, InputEvent, KeyAction, Keycode, MotionAction, Source, ToolType,
 };
 use android_activity::{
     AndroidApp, AndroidAppWaker, ConfigurationRef, InputStatus, MainEvent, Rect,
@@ -391,7 +391,9 @@ impl<T: 'static> EventLoop<T> {
                 {
                     let window_id = window::WindowId(WindowId);
                     let device_id = event::DeviceId(DeviceId(motion_event.device_id()));
-                    let button = motion_event.action_button();
+
+                    // .action_button() will crash on API Level < 33, use .button_state() instead
+                    let button = motion_event.button_state();
 
                     // Mouse move (hover or drag)
                     match action {
@@ -414,33 +416,30 @@ impl<T: 'static> EventLoop<T> {
                         | MotionAction::PointerDown
                         | MotionAction::PointerUp
                         // | MotionAction::HoverEnter // These Hover events are reported by Android Studio Desktop AVDs, it seems like they simulate stylus as input method, but we will redirect clicks based on `MotionAction::Down` and `MotionAction::Up`
-                        // | MotionAction::HoverExit 
+                        // | MotionAction::HoverExit
                         | MotionAction::Down
                         | MotionAction::Up
                         | MotionAction::Cancel=> {
                             // Mouse button pressed
 
                             // Skip `MotionAction::Down` and `MotionAction::Up` when source is mouse as they already reported on `MotionAction::PointerDown` and `MotionAction::PointerUp`
+                            // The issue is here: drag gesture start with down and up
                             if (source == Source::Mouse ||  source == Source::Touchpad) && (action == MotionAction::Down || action == MotionAction::Up) {
                                 return input_status;
                             }
 
                             let button = match button {
-                                Button::Primary => MouseButton::Left,
-                                Button::Secondary => MouseButton::Right,
-                                Button::Tertiary => MouseButton::Middle,
-                                Button::Back => MouseButton::Back,
-                                Button::Forward => MouseButton::Forward,
-                                Button::StylusPrimary => MouseButton::Left,
-                                Button::StylusSecondary => {
+                                _ if button.primary() => MouseButton::Left,
+                                _ if button.secondary() => MouseButton::Right,
+                                _ if button.teriary() => MouseButton::Middle,
+                                _ if button.back() => MouseButton::Back,
+                                _ if button.forward() => MouseButton::Forward,
+                                _ if button.stylus_primary() => MouseButton::Left,
+                                _ if button.stylus_secondary() => {
                                     MouseButton::Right
                                 },
-                                Button::__Unknown(code) => {
-                                    warn!("Unknown button: {:?}, code: {}", button, code);
-                                    MouseButton::Left
-                                },
-                                _ => {
-                                    warn!("A new button variant detected: {:?}", button);
+                                _  => {
+                                    warn!("Unknown button: {:?}", button);
                                     MouseButton::Left
                                 },
                             };

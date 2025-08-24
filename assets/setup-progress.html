@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Welcome to Local Desktop</title>
-    <script src="https://cdn.jsdelivr.net/npm/vue@3"></script>
+    <script src="https://cdn.jsdelivr.net/npm/vue@2/dist/vue.js"></script>
     <style>
       ::selection {
         background-color: rgba(144, 238, 144, 0.5);
@@ -44,6 +44,7 @@
             :key="log.id"
             :style="{
               display: 'flex',
+              flex: 'none',
               marginBottom: '5px',
               color: log.isError ? '#ff0000' : 'white'
             }"
@@ -58,6 +59,8 @@
             >
               {{ new Date(log.timestamp).toLocaleTimeString() }}
             </div>
+            <!-- Prettier may append line breaks/indents before and after the message. And white-space: pre-wrap will show all these line breaks/indents to the user. So we must turn it off for the next line -->
+            <!-- prettier-ignore -->
             <div style="flex: 1; white-space: pre-wrap">{{ log.message }}</div>
           </div>
         </div>
@@ -109,7 +112,8 @@
     </div>
 
     <script>
-      const app = Vue.createApp({
+      new Vue({
+        el: "body > div",
         data() {
           return {
             showFullLog: false,
@@ -121,7 +125,9 @@
         },
         computed: {
           message() {
-            return this.logs[0]?.message || "Installing...";
+            return this.logs.length > 0
+              ? this.logs[0].message
+              : "Installing...";
           },
           progressBarColor() {
             return this.hasError ? "#ff0000" : "#006400";
@@ -175,8 +181,6 @@
           };
         },
       });
-
-      app.mount("body > div");
     </script>
   </body>
 </html>

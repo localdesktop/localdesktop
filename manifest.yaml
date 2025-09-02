@@ -2,6 +2,7 @@ icon: assets/icon.png
 android:
   assets:
     - assets/setup-progress.html
+    - assets/unsupported.html
   runtime_libs:
     - assets/libs
   gradle: true

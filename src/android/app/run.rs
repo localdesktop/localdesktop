@@ -2,10 +2,12 @@ use std::thread;
 
 use super::build::{PolarBearApp, PolarBearBackend};
 use crate::android::{
-    backend::wayland::{bind, centralize, handle, State},
+    backend::{
+        wayland::{bind, centralize, handle, State},
+        webview::ErrorVariant,
+    },
     proot::launch::launch,
-    utils::ndk::run_in_jvm,
-    utils::webview::show_webview_popup,
+    utils::{ndk::run_in_jvm, webview::show_webview_popup},
 };
 use crate::core::config;
 use smithay::output::{Mode, Output, PhysicalProperties, Scale, Subpixel};
@@ -19,8 +21,15 @@ impl ApplicationHandler for PolarBearApp {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         match self.backend {
             PolarBearBackend::WebView(ref mut backend) => {
-                let port = backend.socket_port;
-                let url = format!("file:///android_asset/setup-progress.html?port={}", port);
+                let url = match backend.error {
+                    ErrorVariant::None => {
+                        let port = backend.socket_port;
+                        format!("file:///android_asset/setup-progress.html?port={}", port)
+                    }
+                    ErrorVariant::Unsupported => {
+                        format!("file:///android_asset/unsupported.html")
+                    }
+                };
                 let android_app = self.frontend.android_app.clone();
                 thread::spawn(move || {
                     run_in_jvm(

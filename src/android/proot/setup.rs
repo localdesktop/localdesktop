@@ -4,7 +4,7 @@ use crate::{
         app::build::PolarBearBackend,
         backend::{
             wayland::{Compositor, WaylandBackend},
-            webview::WebviewBackend,
+            webview::{ErrorVariant, WebviewBackend},
         },
         utils::application_context::get_application_context,
     },
@@ -324,6 +324,20 @@ fn fix_xkb_symlink(options: &SetupOptions) -> StageOutput {
 pub fn setup(android_app: AndroidApp) -> PolarBearBackend {
     let (sender, receiver) = mpsc::channel();
     let progress = Arc::new(Mutex::new(0));
+
+    if ArchProcess::is_supported() {
+        sender
+            .send(SetupMessage::Progress(
+                "✅ Your device is supported!".to_string(),
+            ))
+            .unwrap_or(());
+    } else {
+        return PolarBearBackend::WebView(WebviewBackend {
+            socket_port: 0,
+            progress,
+            error: ErrorVariant::Unsupported,
+        });
+    }
 
     let options = SetupOptions {
         android_app,

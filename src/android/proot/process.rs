@@ -15,14 +15,36 @@ pub struct ArchProcess {
 }
 
 impl ArchProcess {
-    pub fn spawn(mut self) -> Self {
-        // Run the command inside Proot
+    pub fn is_supported() -> bool {
         let context = get_application_context();
-
-        #[cfg(not(test))]
         let proot_loader = context.native_library_dir.join("libproot_loader.so");
-        #[cfg(test)]
-        let proot_loader = "/data/local/tmp/libproot_loader.so";
+
+        let mut process = Command::new(context.native_library_dir.join("libproot.so"));
+        process
+            .env("PROOT_LOADER", proot_loader)
+            .env("PROOT_TMP_DIR", config::ARCH_FS_ROOT)
+            .arg("-r")
+            .arg("/")
+            .arg("-L")
+            .arg("--link2symlink")
+            .arg("--sysvipc")
+            .arg("--kill-on-exit")
+            .arg("--root-id")
+            .arg("sh")
+            .arg("-c")
+            .arg("cat /proc/cpuinfo 2>&1");
+
+        process
+            .stdout(Stdio::piped())
+            .spawn()
+            .map(|res| res.stdout.is_some())
+            .unwrap_or(false)
+    }
+
+    /// Run the command inside Proot
+    pub fn spawn(mut self) -> Self {
+        let context = get_application_context();
+        let proot_loader = context.native_library_dir.join("libproot_loader.so");
 
         let mut process = Command::new(context.native_library_dir.join("libproot.so"));
         process

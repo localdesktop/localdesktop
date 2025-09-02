@@ -7,9 +7,15 @@ use std::thread;
 use websocket::sync::Server;
 use websocket::OwnedMessage;
 
+pub enum ErrorVariant {
+    None,
+    Unsupported,
+}
+
 pub struct WebviewBackend {
     pub socket_port: u16,
     pub progress: Arc<Mutex<u16>>, // 0-100
+    pub error: ErrorVariant,
 }
 
 impl WebviewBackend {
@@ -85,6 +91,7 @@ impl WebviewBackend {
         Self {
             socket_port,
             progress,
+            error: ErrorVariant::None,
         }
     }
 }

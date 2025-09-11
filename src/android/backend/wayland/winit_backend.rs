@@ -67,7 +67,7 @@ unsafe impl EGLNativeSurface for AndroidNativeSurface {
 }
 
 fn create_egl_display(
-    handle: AndroidNdkWindowHandle,
+    _handle: AndroidNdkWindowHandle,
 ) -> Result<EGLDisplay, Box<dyn std::error::Error>> {
     // Load the EGL library
     let lib = unsafe { libloading::Library::new("libEGL.so") }?;
@@ -78,7 +78,7 @@ fn create_egl_display(
         .pb_expect("Failed to get EGL display");
 
     // Initialize the display
-    let (major, minor) = egl.initialize(display)?;
+    let (_major, _minor) = egl.initialize(display)?;
 
     // Choose an EGL configuration
     let config_attribs = [khronos_egl::NONE];

@@ -1,0 +1,52 @@
+[package]
+name = "localdesktop"
+
+[android]
+# Storage permissions for accessing Android files from Linux environment
+uses_permissions = [
+    "android.permission.READ_EXTERNAL_STORAGE",
+    "android.permission.WRITE_EXTERNAL_STORAGE",
+    # For Android 11+ - allows access to all files
+    "android.permission.MANAGE_EXTERNAL_STORAGE",
+    # For Android 13+ compatibility
+    "android.permission.READ_MEDIA_IMAGES",
+    "android.permission.READ_MEDIA_VIDEO", 
+    "android.permission.READ_MEDIA_AUDIO",
+]
+
+[android.application]
+has_code = false
+use_cleartext_traffic = true
+extract_native_libs = true
+
+[android.application.activity]
+config_changes = "orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
+launch_mode = "singleTop"
+window_soft_input_mode = "adjustResize"
+exported = true
+hardware_accelerated = true
+
+[[android.application.activity.intent_filter]]
+actions = ["android.intent.action.MAIN"]
+categories = ["android.intent.category.LAUNCHER"]
+
+# Samsung DeX support metadata
+[[android.application.meta_data]]
+name = "com.samsung.android.dex.launchwidth"
+value = "0"
+
+[[android.application.meta_data]]  
+name = "com.samsung.android.dex.launchheight"
+value = "0"
+
+[[android.application.meta_data]]
+name = "com.samsung.android.sdk.multiwindow.dex.launchwidth" 
+value = "0"
+
+[[android.application.meta_data]]
+name = "com.samsung.android.sdk.multiwindow.dex.launchheight"
+value = "0"
+
+[[android.application.uses_feature]]
+name = "android.hardware.type.pc"
+required = false

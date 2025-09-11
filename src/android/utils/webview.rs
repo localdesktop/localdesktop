@@ -1,5 +1,3 @@
-use std::thread;
-
 use jni::objects::{JObject, JValue};
 use jni::sys::_jobject;
 use jni::JNIEnv;
@@ -27,7 +25,7 @@ pub fn show_webview_popup(env: &mut JNIEnv, android_app: &AndroidApp, url: &str)
         Ok(obj) => obj,
         Err(e) => {
             log::error!("Failed to create WebView object: {:?}", e);
-            if let Ok(java_exception) = env.exception_occurred() {
+            if let Ok(_java_exception) = env.exception_occurred() {
                 env.exception_describe().unwrap();
                 env.exception_clear().unwrap();
             } else {

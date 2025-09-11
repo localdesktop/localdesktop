@@ -28,6 +28,9 @@ android:
       - name: android.permission.INTERNET
       - name: android.permission.ACCESS_NETWORK_STATE
       - name: android.permission.POST_NOTIFICATIONS
+      - name: android.permission.READ_EXTERNAL_STORAGE
+      - name: android.permission.WRITE_EXTERNAL_STORAGE
+      - name: android.permission.MANAGE_EXTERNAL_STORAGE
     uses_feature:
       - name: android.hardware.type.pc
         required: false

@@ -1,5 +1,7 @@
 use crate::android::utils::application_context::get_application_context;
+use crate::android::proot::storage::StorageSetup;
 use crate::core::{config, logging::PolarBearExpectation};
+use winit::platform::android::activity::AndroidApp;
 use std::io::BufRead;
 use std::io::BufReader;
 use std::io::Read;
@@ -12,6 +14,7 @@ pub struct ArchProcess {
     pub user: String,
     pub process: Option<Child>,
     pub panic_on_error: bool,
+    pub enable_storage_access: bool,
 }
 
 impl ArchProcess {
@@ -41,8 +44,13 @@ impl ArchProcess {
             .unwrap_or(false)
     }
 
-    /// Run the command inside Proot
-    pub fn spawn(mut self) -> Self {
+    /// Run the command inside Proot  
+    pub fn spawn(self) -> Self {
+        self.spawn_with_android_app(None)
+    }
+
+    /// Run the command inside Proot with optional Android app for storage access
+    pub fn spawn_with_android_app(mut self, android_app: Option<AndroidApp>) -> Self {
         let context = get_application_context();
         let proot_loader = context.native_library_dir.join("libproot_loader.so");
 
@@ -73,9 +81,24 @@ impl ArchProcess {
             .arg(format!("--bind={}/proc/.vmstat:/proc/vmstat", config::ARCH_FS_ROOT))
             .arg(format!("--bind={}/proc/.sysctl_entry_cap_last_cap:/proc/sys/kernel/cap_last_cap", config::ARCH_FS_ROOT))
             .arg(format!("--bind={}/proc/.sysctl_inotify_max_user_watches:/proc/sys/fs/inotify/max_user_watches", config::ARCH_FS_ROOT))
-            .arg(format!("--bind={}/sys/.empty:/sys/fs/selinux", config::ARCH_FS_ROOT))
-            .arg("/usr/bin/env")
-            .arg("-i");
+            .arg(format!("--bind={}/sys/.empty:/sys/fs/selinux", config::ARCH_FS_ROOT));
+
+        // Add storage bind mounts if enabled and available
+        if self.enable_storage_access {
+            if let Some(app) = android_app {
+                let storage_setup = StorageSetup::new(app);
+                let storage_bind_mounts = storage_setup.get_storage_bind_mounts();
+                
+                for bind_mount in storage_bind_mounts {
+                    process.arg(bind_mount);
+                    log::debug!("Added storage bind mount to proot");
+                }
+            } else {
+                log::warn!("Storage access enabled but no AndroidApp provided, skipping storage mounts");
+            }
+        }
+
+        process.arg("/usr/bin/env").arg("-i");
 
         let home = if self.user == "root" {
             "HOME=/root".to_string()
@@ -122,6 +145,7 @@ impl ArchProcess {
             user: "root".to_string(),
             process: None,
             panic_on_error: false,
+            enable_storage_access: false,
         }
         .spawn()
     }
@@ -132,8 +156,33 @@ impl ArchProcess {
             user: user.to_string(),
             process: None,
             panic_on_error: false,
+            enable_storage_access: false,
         }
         .spawn()
+    }
+
+    /// Execute command with storage access enabled
+    pub fn exec_with_storage(command: &str, android_app: AndroidApp) -> Self {
+        ArchProcess {
+            command: command.to_string(),
+            user: "root".to_string(),
+            process: None,
+            panic_on_error: false,
+            enable_storage_access: true,
+        }
+        .spawn_with_android_app(Some(android_app))
+    }
+
+    /// Execute command as specific user with storage access enabled
+    pub fn exec_as_with_storage(command: &str, user: &str, android_app: AndroidApp) -> Self {
+        ArchProcess {
+            command: command.to_string(),
+            user: user.to_string(),
+            process: None,
+            panic_on_error: false,
+            enable_storage_access: true,
+        }
+        .spawn_with_android_app(Some(android_app))
     }
 
     pub fn with_log(self, mut log: impl FnMut(String)) {
@@ -174,6 +223,7 @@ impl ArchProcess {
             user: "root".to_string(),
             process: None,
             panic_on_error: true,
+            enable_storage_access: false,
         }
         .spawn()
         .process)
@@ -221,6 +271,7 @@ mod tests {
             user: "root".to_string(),
             process: None,
             panic_on_error: true,
+            enable_storage_access: false,
         }
         .spawn()
         .with_log(|log| {

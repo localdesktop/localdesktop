@@ -1,4 +1,4 @@
-use super::process::ArchProcess;
+use super::{process::ArchProcess, storage::StorageSetup};
 use crate::{
     android::{
         app::build::PolarBearBackend,
@@ -321,6 +321,47 @@ fn fix_xkb_symlink(options: &SetupOptions) -> StageOutput {
     None
 }
 
+fn setup_storage_access(options: &SetupOptions) -> StageOutput {
+    let storage_setup = StorageSetup::new(options.android_app.clone());
+    let mpsc_sender = options.mpsc_sender.clone();
+
+    // Only set up storage if it's not already configured
+    if !storage_setup.is_storage_setup() {
+        return Some(thread::spawn(move || {
+            mpsc_sender
+                .send(SetupMessage::Progress(
+                    "Setting up Android storage access...".to_string(),
+                ))
+                .pb_expect("Failed to send log message");
+
+            match storage_setup.setup_storage_access() {
+                Ok(()) => {
+                    mpsc_sender
+                        .send(SetupMessage::Progress(
+                            "Storage access configured successfully".to_string(),
+                        ))
+                        .pb_expect("Failed to send success message");
+                }
+                Err(e) => match e {
+                    crate::android::proot::storage::StorageSetupError::PermissionDenied => {
+                        mpsc_sender
+                                .send(SetupMessage::Progress(
+                                    "Storage permission required - please grant storage access when prompted".to_string(),
+                                ))
+                                .pb_expect("Failed to send permission message");
+                    }
+                    _ => {
+                        mpsc_sender
+                            .send(SetupMessage::Error(format!("Storage setup failed: {}", e)))
+                            .unwrap_or(());
+                    }
+                },
+            }
+        }));
+    }
+    None
+}
+
 pub fn setup(android_app: AndroidApp) -> PolarBearBackend {
     let (sender, receiver) = mpsc::channel();
     let progress = Arc::new(Mutex::new(0));
@@ -350,6 +391,7 @@ pub fn setup(android_app: AndroidApp) -> PolarBearBackend {
         Box::new(install_dependencies),         // Step 3. Install dependencies
         Box::new(setup_firefox_config),         // Step 4. Setup Firefox config
         Box::new(fix_xkb_symlink),              // Step 5. Fix xkb symlink (last)
+        Box::new(setup_storage_access),         // Step 6. Setup Android storage access
     ];
 
     let handle_stage_error = |e: Box<dyn std::any::Any + Send>, sender: &Sender<SetupMessage>| {

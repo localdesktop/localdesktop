@@ -198,7 +198,11 @@ pub fn build(env: &BuildEnv, libraries: Vec<(Target, PathBuf)>, out: &Path) -> R
 
     let opt = env.target().opt();
     let format = env.target().format();
-    let mut cmd = Command::new("gradle");
+    let mut cmd = if cfg!(windows) {
+        Command::new("gradle.bat")
+    } else {
+        Command::new("gradle")
+    };
     cmd.current_dir(&gradle);
     cmd.arg(match format {
         Format::Aab => "bundle",

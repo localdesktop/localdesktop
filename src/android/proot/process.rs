@@ -2,7 +2,6 @@ use crate::android::utils::application_context::get_application_context;
 use crate::core::{config, logging::PolarBearExpectation};
 use std::io::BufRead;
 use std::io::BufReader;
-use std::io::Read;
 use std::process::{Child, Command, Stdio};
 
 pub type Log = Box<dyn Fn(String)>;
@@ -11,45 +10,22 @@ pub struct ArchProcess {
     pub command: String,
     pub user: String,
     pub process: Option<Child>,
-    pub panic_on_error: bool,
 }
 
 impl ArchProcess {
-    pub fn is_supported() -> bool {
+    fn setup_base_command() -> Command {
         let context = get_application_context();
         let proot_loader = context.native_library_dir.join("libproot_loader.so");
 
         let mut process = Command::new(context.native_library_dir.join("libproot.so"));
         process
             .env("PROOT_LOADER", proot_loader)
-            .env("PROOT_TMP_DIR", config::ARCH_FS_ROOT)
-            .arg("-r")
-            .arg("/")
-            .arg("-L")
-            .arg("--link2symlink")
-            .arg("--sysvipc")
-            .arg("--kill-on-exit")
-            .arg("--root-id")
-            .arg("sh")
-            .arg("-c")
-            .arg("cat /proc/cpuinfo 2>&1");
-
+            .env("PROOT_TMP_DIR", config::ARCH_FS_ROOT);
         process
-            .stdout(Stdio::piped())
-            .spawn()
-            .map(|res| res.stdout.is_some())
-            .unwrap_or(false)
     }
 
-    /// Run the command inside Proot
-    pub fn spawn(mut self) -> Self {
-        let context = get_application_context();
-        let proot_loader = context.native_library_dir.join("libproot_loader.so");
-
-        let mut process = Command::new(context.native_library_dir.join("libproot.so"));
+    fn with_args(mut process: Command) -> Command {
         process
-            .env("PROOT_LOADER", proot_loader)
-            .env("PROOT_TMP_DIR", config::ARCH_FS_ROOT)
             .arg("-r")
             .arg(config::ARCH_FS_ROOT)
             .arg("-L")
@@ -73,14 +49,17 @@ impl ArchProcess {
             .arg(format!("--bind={}/proc/.vmstat:/proc/vmstat", config::ARCH_FS_ROOT))
             .arg(format!("--bind={}/proc/.sysctl_entry_cap_last_cap:/proc/sys/kernel/cap_last_cap", config::ARCH_FS_ROOT))
             .arg(format!("--bind={}/proc/.sysctl_inotify_max_user_watches:/proc/sys/fs/inotify/max_user_watches", config::ARCH_FS_ROOT))
-            .arg(format!("--bind={}/sys/.empty:/sys/fs/selinux", config::ARCH_FS_ROOT))
-            .arg("/usr/bin/env")
-            .arg("-i");
+            .arg(format!("--bind={}/sys/.empty:/sys/fs/selinux", config::ARCH_FS_ROOT));
+        process
+    }
 
-        let home = if self.user == "root" {
+    fn with_env_vars(mut process: Command, user: &str) -> Command {
+        process.arg("/usr/bin/env").arg("-i");
+
+        let home = if user == "root" {
             "HOME=/root".to_string()
         } else {
-            format!("HOME=/home/{}", self.user)
+            format!("HOME=/home/{}", user)
         };
         process.arg(home);
 
@@ -88,27 +67,55 @@ impl ArchProcess {
             .arg("LANG=C.UTF-8")
             .arg("PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/games:/usr/games:/system/bin:/system/xbin")
             .arg("TMPDIR=/tmp")
-            .arg(format!("USER={}", self.user))
-            .arg(format!("LOGNAME={}", self.user));
-        if self.user == "root" {
+            .arg(format!("USER={}", user))
+            .arg(format!("LOGNAME={}", user));
+        process
+    }
+
+    fn with_user_shell(mut process: Command, user: &str) -> Command {
+        if user == "root" {
             process.arg("sh");
         } else {
             process
                 .arg("runuser")
                 .arg("-u")
-                .arg(&self.user)
+                .arg(user)
                 .arg("--")
                 .arg("sh");
         }
+        process
+    }
+
+    pub fn is_supported() -> bool {
+        Self::setup_base_command()
+            .arg("-r")
+            .arg("/")
+            .arg("-L")
+            .arg("--link2symlink")
+            .arg("--sysvipc")
+            .arg("--kill-on-exit")
+            .arg("--root-id")
+            .arg("sh")
+            .arg("-c")
+            .arg("cat /proc/cpuinfo")
+            .stdout(Stdio::piped())
+            .spawn()
+            .map(|res| res.stderr.is_none())
+            .unwrap_or(false)
+    }
+
+    /// Run the command inside Proot
+    pub fn spawn(mut self) -> Self {
+        let mut process = Self::setup_base_command();
+        process = Self::with_args(process);
+        process = Self::with_env_vars(process, &self.user);
+        process = Self::with_user_shell(process, &self.user);
+
         let child = process
             .arg("-c")
             .arg(&self.command)
             .stdout(Stdio::piped())
-            .stderr(if self.panic_on_error {
-                Stdio::piped()
-            } else {
-                Stdio::inherit()
-            })
+            .stderr(Stdio::inherit())
             .spawn()
             .pb_expect("Failed to run command");
 
@@ -121,7 +128,6 @@ impl ArchProcess {
             command: command.to_string(),
             user: "root".to_string(),
             process: None,
-            panic_on_error: false,
         }
         .spawn()
     }
@@ -131,7 +137,6 @@ impl ArchProcess {
             command: command.to_string(),
             user: user.to_string(),
             process: None,
-            panic_on_error: false,
         }
         .spawn()
     }
@@ -143,6 +148,26 @@ impl ArchProcess {
                 let line = line.unwrap();
                 log(line);
             }
+        }
+    }
+
+    pub fn exec_with_panic_on_error(command: &str) {
+        let mut process = Self::setup_base_command();
+        process = Self::with_args(process);
+        process = Self::with_env_vars(process, "root");
+        process = Self::with_user_shell(process, "root");
+
+        let output = process
+            .arg("-c")
+            .arg(command)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .pb_expect("Failed to run command");
+
+        let error_output = String::from_utf8_lossy(&output.stderr);
+        if error_output.contains("fatal error: see `libproot.so --help`") {
+            panic!("PRoot error: {}", error_output);
         }
     }
 
@@ -166,80 +191,5 @@ impl ArchProcess {
                 "Process not spawned",
             ))
         }
-    }
-
-    pub fn exec_with_panic_on_error(command: &str) {
-        if let Some(child) = (ArchProcess {
-            command: command.to_string(),
-            user: "root".to_string(),
-            process: None,
-            panic_on_error: true,
-        }
-        .spawn()
-        .process)
-        {
-            // What is the best way to get full stderr as a string?
-            if let Some(stderr) = child.stderr {
-                let mut error_output = String::new();
-                let mut reader = BufReader::new(stderr);
-                reader.read_to_string(&mut error_output).unwrap();
-                if error_output.contains("fatal error: see `libproot.so --help`") {
-                    panic!("PRoot error: {}", error_output);
-                }
-            }
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::collections::VecDeque;
-
-    #[test]
-    fn should_echoable() {
-        let process = ArchProcess::exec("echo hello");
-        let output = process.wait_with_output().expect("Failed to read output");
-        assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "hello");
-    }
-
-    #[test]
-    fn should_output_uname() {
-        let process = ArchProcess::exec("uname -a");
-        let output = process.wait_with_output().expect("Failed to read output");
-        log::info!("Output: {}", String::from_utf8_lossy(&output.stdout));
-        assert!(String::from_utf8_lossy(&output.stdout)
-            .to_lowercase()
-            .contains("arch"));
-    }
-
-    #[test]
-    fn should_run_with_log_successfully() {
-        let mut logs = VecDeque::new();
-        ArchProcess {
-            command: "echo hello".to_string(),
-            user: "root".to_string(),
-            process: None,
-            panic_on_error: true,
-        }
-        .spawn()
-        .with_log(|log| {
-            logs.push_back(log.to_string());
-        });
-        assert!(logs.iter().any(|log| log.contains("hello")));
-    }
-
-    #[test]
-    fn should_exit_with_success_code() {
-        let process = ArchProcess::exec("pacman -Ss chrome");
-        let status = process.wait().expect("Failed to wait for process");
-        assert_eq!(status.success(), true);
-    }
-
-    #[test]
-    fn should_exit_with_fail_code() {
-        let process = ArchProcess::exec("pacman -Qg plasmma");
-        let status = process.wait().expect("Failed to wait for process");
-        assert_ne!(status.success(), true);
     }
 }

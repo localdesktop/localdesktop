@@ -1,6 +1,14 @@
 pub mod core {
     pub mod config;
     pub mod logging;
+    pub mod packager {
+        pub mod adb;
+        pub mod build;
+        pub mod env;
+        pub mod gradle;
+        pub mod llvm;
+        pub mod run;
+    }
 }
 
 #[cfg(target_os = "android")]

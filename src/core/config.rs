@@ -13,7 +13,7 @@ pub const ARCH_FS_ROOT: &str = "/data/data/app.polarbear/files/arch";
 #[cfg(test)]
 pub const ARCH_FS_ROOT: &str = "/data/local/tmp/arch";
 
-pub const ARCH_FS_ARCHIVE: &str = "https://github.com/termux/proot-distro/releases/download/v4.22.1/archlinux-aarch64-pd-v4.22.1.tar.xz";
+pub const ARCH_FS_ARCHIVE: &str = "https://github.com/termux/proot-distro/releases/download/v4.29.0/archlinux-aarch64-pd-v4.29.0.tar.xz";
 
 pub const WAYLAND_SOCKET_NAME: &str = "wayland-0";
 
@@ -64,15 +64,15 @@ pub struct CommandConfig {
 }
 
 fn default_check() -> String {
-    "pacman -Q xorg-xwayland && pacman -Qg xfce4 && pacman -Q onboard".to_string()
+    "pacman -Qg plasma".to_string()
 }
 
 fn default_install() -> String {
-    "stdbuf -oL pacman -Syu xorg-xwayland xfce4 onboard --noconfirm --noprogressbar".to_string()
+    "stdbuf -oL pacman -Syu plasma --noconfirm --noprogressbar".to_string()
 }
 
 fn default_launch() -> String {
-    "XDG_RUNTIME_DIR=/tmp Xwayland -hidpi :1 2>&1 & while [ ! -e /tmp/.X11-unix/X1 ]; do sleep 0.1; done; XDG_SESSION_TYPE=x11 DISPLAY=:1 dbus-launch startxfce4 2>&1"
+    "XDG_RUNTIME_DIR=/tmp Xwayland -hidpi :1 2>&1 & while [ ! -e /tmp/.X11-unix/X1 ]; do sleep 0.1; done; XDG_SESSION_TYPE=x11 DISPLAY=:1 dbus-launch startplasma-x11 2>&1"
                 .to_string()
 }
 

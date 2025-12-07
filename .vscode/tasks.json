@@ -38,7 +38,7 @@
       "command": "sh",
       "args": [
         "-c",
-        "adb logcat -c && adb logcat -s RustStdoutStderr"
+        "adb logcat -c && adb logcat -e app.polarbear"
       ]
     }
   ]

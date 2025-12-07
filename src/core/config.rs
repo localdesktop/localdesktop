@@ -15,7 +15,7 @@ pub const ARCH_FS_ROOT: &str = "/data/local/tmp/arch";
 
 pub const ARCH_FS_ARCHIVE: &str = "https://github.com/termux/proot-distro/releases/download/v4.29.0/archlinux-aarch64-pd-v4.29.0.tar.xz";
 
-pub const WAYLAND_SOCKET_NAME: &str = "wayland-0";
+pub const WAYLAND_SOCKET_NAME: &str = "wayland-ld";
 
 pub const MAX_PANEL_LOG_ENTRIES: usize = 100;
 
@@ -64,16 +64,16 @@ pub struct CommandConfig {
 }
 
 fn default_check() -> String {
-    "pacman -Qg plasma".to_string()
+    "pacman -Qg plasma && pacman -Q konsole && pacman -Q plasma-keyboard".to_string()
 }
 
 fn default_install() -> String {
-    "stdbuf -oL pacman -Syu plasma --noconfirm --noprogressbar".to_string()
+    "stdbuf -oL pacman -Syu plasma konsole plasma-keyboard --noconfirm --noprogressbar".to_string()
 }
 
 fn default_launch() -> String {
-    "XDG_RUNTIME_DIR=/tmp Xwayland -hidpi :1 2>&1 & while [ ! -e /tmp/.X11-unix/X1 ]; do sleep 0.1; done; XDG_SESSION_TYPE=x11 DISPLAY=:1 dbus-launch startplasma-x11 2>&1"
-                .to_string()
+    "XDG_RUNTIME_DIR=/tmp WAYLAND_DISPLAY=wayland-ld dbus-launch startplasma-wayland 2>&1"
+        .to_string()
 }
 
 impl Default for CommandConfig {

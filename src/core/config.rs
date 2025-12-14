@@ -72,8 +72,7 @@ fn default_install() -> String {
 }
 
 fn default_launch() -> String {
-    "XDG_RUNTIME_DIR=/tmp WAYLAND_DISPLAY=wayland-ld dbus-launch startplasma-wayland 2>&1"
-        .to_string()
+    "XDG_RUNTIME_DIR=/tmp Xwayland -hidpi :1 2>&1 & while [ ! -e /tmp/.X11-unix/X1 ]; do sleep 0.1; done; XDG_SESSION_TYPE=x11 DISPLAY=:1 dbus-launch startplasma-x11 2>&1".to_string()
 }
 
 impl Default for CommandConfig {

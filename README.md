@@ -18,8 +18,16 @@ _Proof of Concept: A Pixel Tablet running the XFCE desktop environment inside a 
 
 ### How to build an APK
 
+Along with Rust, please make sure you have these components installed:
+
+```
+brew install llvm lld gradle@8
+```
+
+Then install our local version of xbuild:
+
 ```bash
-cargo install xbuild
+cargo install --path patches/xbuild/xbuild
 x build --release --platform android --arch arm64 --format apk
 ```
 

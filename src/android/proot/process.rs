@@ -98,7 +98,7 @@ impl ArchProcess {
             .arg("sh")
             .arg("-c")
             .arg("cat /proc/cpuinfo")
-            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
             .spawn()
             .map(|res| res.stderr.is_none())
             .unwrap_or(false)

@@ -1,5 +1,6 @@
 use crate::android::utils::application_context::get_application_context;
 use crate::core::{config, logging::PolarBearExpectation};
+use smithay::reexports::rustix::path::Arg;
 use std::io::BufRead;
 use std::io::BufReader;
 use std::process::{Child, Command, Stdio};
@@ -20,7 +21,7 @@ impl ArchProcess {
         let mut process = Command::new(context.native_library_dir.join("libproot.so"));
         process
             .env("PROOT_LOADER", proot_loader)
-            .env("PROOT_TMP_DIR", config::ARCH_FS_ROOT);
+            .env("PROOT_TMP_DIR", context.data_dir);
         process
     }
 
@@ -87,6 +88,7 @@ impl ArchProcess {
     }
 
     pub fn is_supported() -> bool {
+        let check_command = "cat /proc/cpuinfo";
         Self::setup_base_command()
             .arg("-r")
             .arg("/")
@@ -97,10 +99,14 @@ impl ArchProcess {
             .arg("--root-id")
             .arg("sh")
             .arg("-c")
-            .arg("cat /proc/cpuinfo")
-            .stderr(Stdio::piped())
-            .spawn()
-            .map(|res| res.stderr.is_none())
+            .arg(check_command)
+            .output()
+            .map(|res| {
+                log::error!("✅ {}\n{}", check_command, res.stderr.to_string_lossy());
+                log::info!("✅ {}\n{}", check_command, res.stdout.to_string_lossy());
+                res.stderr.is_empty()
+            })
+            .inspect_err(|e| log::error!("❌ Spawn check command failed: {}", e))
             .unwrap_or(false)
     }
 

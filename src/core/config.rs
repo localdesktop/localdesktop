@@ -9,11 +9,14 @@ use std::{
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[cfg(not(test))]
-pub const ARCH_FS_ROOT: &str = "/data/data/app.polarbear/files/arch";
+pub const ROOT_FS_ROOT: &str = "/data/data/app.polarbear/files/arch";
 #[cfg(test)]
-pub const ARCH_FS_ROOT: &str = "/data/local/tmp/arch";
+pub const ROOT_FS_ROOT: &str = "/data/local/tmp/rootfs";
 
-pub const ARCH_FS_ARCHIVE: &str = "https://github.com/termux/proot-distro/releases/download/v4.29.0/archlinux-aarch64-pd-v4.29.0.tar.xz";
+pub const ROOT_FS_ARCHIVE_PARTS: &[&str] = &[
+    "https://github.com/localdesktop/localdesktop/releases/download/v1.5.0/filesystem.squashfs.part-00",
+    "https://github.com/localdesktop/localdesktop/releases/download/v1.5.0/filesystem.squashfs.part-01",
+];
 
 pub const WAYLAND_SOCKET_NAME: &str = "wayland-ld";
 
@@ -161,15 +164,15 @@ fn process_config_file(full_config_path: String) -> Vec<String> {
 }
 
 pub fn save_config(config: &LocalConfig) {
-    // If Arch FS does not exist or is empty, return early as we don't want to accidentally scaffold the /etc folder insi
-    if Path::new(ARCH_FS_ROOT)
+    // If root FS does not exist or is empty, return early as we don't want to accidentally scaffold the /etc folder insi
+    if Path::new(ROOT_FS_ROOT)
         .read_dir()
         .map_or(true, |mut d| d.next().is_none())
     {
         return;
     }
 
-    let config_path = format!("{}{}", ARCH_FS_ROOT, CONFIG_FILE);
+    let config_path = format!("{}{}", ROOT_FS_ROOT, CONFIG_FILE);
     let config_path = Path::new(&config_path);
     let config_dir = config_path
         .parent()

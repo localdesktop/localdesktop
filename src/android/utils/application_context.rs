@@ -1,5 +1,5 @@
 use crate::core::{
-    config::{parse_config, LocalConfig, ARCH_FS_ROOT, CONFIG_FILE},
+    config::{parse_config, LocalConfig, CONFIG_FILE, ROOT_FS_ROOT},
     logging::PolarBearExpectation,
 };
 use jni::{
@@ -32,7 +32,7 @@ impl ApplicationContext {
         let cache_dir = Self::get_path(&mut env, &activity, "getCacheDir");
         let data_dir = Self::get_path(&mut env, &activity, "getFilesDir");
         let native_library_dir = Self::get_native_library_dir(&mut env, &activity);
-        let full_config_path = format!("{}{}", ARCH_FS_ROOT, CONFIG_FILE);
+        let full_config_path = format!("{}{}", ROOT_FS_ROOT, CONFIG_FILE);
         let local_config = parse_config(full_config_path);
 
         {

@@ -50,9 +50,8 @@ smithay = { version = "0.5.0", default-features = false, features = [
 [target.'cfg(not(target_os = "android"))'.dependencies] # Deps used only for setting up cross testing
 
 [dependencies] # Deps used for both target
+backhand = "0.24.0"
 log = "0.4"
-tar = "0.4.43"
-xz2 = "0.1.7"
 reqwest = { version = "0.12.20", default-features = false, features = [
     "blocking",
     "rustls-tls",

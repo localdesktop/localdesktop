@@ -12,6 +12,7 @@ pub fn launch() {
         let username = local_config.user.username;
 
         let full_launch_command = local_config.command.launch;
+        let full_launch_command = "XDG_RUNTIME_DIR=/tmp WAYLAND_DISPLAY=wayland-ld gnome-shell";
 
         ArchProcess::exec_as(&full_launch_command, &username).with_log(|it| {
             log::info!("{}", it);

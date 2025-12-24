@@ -28,7 +28,7 @@ impl ArchProcess {
     fn with_args(mut process: Command) -> Command {
         process
             .arg("-r")
-            .arg(config::ARCH_FS_ROOT)
+            .arg(config::ROOT_FS_ROOT)
             .arg("-L")
             .arg("--link2symlink")
             .arg("--sysvipc")
@@ -37,20 +37,26 @@ impl ArchProcess {
             .arg("--bind=/dev")
             .arg("--bind=/proc")
             .arg("--bind=/sys")
-            .arg(format!("--bind={}/tmp:/dev/shm", config::ARCH_FS_ROOT))
+            .arg(format!("--bind={}/tmp:/dev/shm", config::ROOT_FS_ROOT))
             .arg("--bind=/dev/urandom:/dev/random")
             .arg("--bind=/proc/self/fd:/dev/fd")
             .arg("--bind=/proc/self/fd/0:/dev/stdin")
             .arg("--bind=/proc/self/fd/1:/dev/stdout")
             .arg("--bind=/proc/self/fd/2:/dev/stderr")
-            .arg(format!("--bind={}/proc/.loadavg:/proc/loadavg", config::ARCH_FS_ROOT))
-            .arg(format!("--bind={}/proc/.stat:/proc/stat", config::ARCH_FS_ROOT))
-            .arg(format!("--bind={}/proc/.uptime:/proc/uptime", config::ARCH_FS_ROOT))
-            .arg(format!("--bind={}/proc/.version:/proc/version", config::ARCH_FS_ROOT))
-            .arg(format!("--bind={}/proc/.vmstat:/proc/vmstat", config::ARCH_FS_ROOT))
-            .arg(format!("--bind={}/proc/.sysctl_entry_cap_last_cap:/proc/sys/kernel/cap_last_cap", config::ARCH_FS_ROOT))
-            .arg(format!("--bind={}/proc/.sysctl_inotify_max_user_watches:/proc/sys/fs/inotify/max_user_watches", config::ARCH_FS_ROOT))
-            .arg(format!("--bind={}/sys/.empty:/sys/fs/selinux", config::ARCH_FS_ROOT));
+            .arg(format!("--bind={}/proc/.loadavg:/proc/loadavg", config::ROOT_FS_ROOT))
+            .arg(format!("--bind={}/proc/.stat:/proc/stat", config::ROOT_FS_ROOT))
+            .arg(format!("--bind={}/proc/.uptime:/proc/uptime", config::ROOT_FS_ROOT))
+            .arg(format!("--bind={}/proc/.version:/proc/version", config::ROOT_FS_ROOT))
+            .arg(format!("--bind={}/proc/.vmstat:/proc/vmstat", config::ROOT_FS_ROOT))
+            .arg(format!(
+                "--bind={}/proc/.sysctl_entry_cap_last_cap:/proc/sys/kernel/cap_last_cap",
+                config::ROOT_FS_ROOT
+            ))
+            .arg(format!(
+                "--bind={}/proc/.sysctl_inotify_max_user_watches:/proc/sys/fs/inotify/max_user_watches",
+                config::ROOT_FS_ROOT
+            ))
+            .arg(format!("--bind={}/sys/.empty:/sys/fs/selinux", config::ROOT_FS_ROOT));
         process
     }
 

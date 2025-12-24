@@ -9,15 +9,16 @@ use crate::{
         utils::application_context::get_application_context,
     },
     core::{
-        config::{CommandConfig, ARCH_FS_ARCHIVE, ARCH_FS_ROOT},
+        config::{CommandConfig, ROOT_FS_ARCHIVE_PARTS, ROOT_FS_ROOT},
         logging::PolarBearExpectation,
     },
 };
+use backhand::{FilesystemReader, InnerNode};
 use pathdiff::diff_paths;
 use smithay::utils::Clock;
 use std::{
     fs::{self, File},
-    io::{Read, Write},
+    io::{BufReader, Read, Write},
     os::unix::fs::{symlink, PermissionsExt},
     path::Path,
     sync::{
@@ -26,9 +27,7 @@ use std::{
     },
     thread::{self, JoinHandle},
 };
-use tar::Archive;
 use winit::platform::android::activity::AndroidApp;
-use xz2::read::XzDecoder;
 
 #[derive(Debug)]
 pub enum SetupMessage {
@@ -51,11 +50,11 @@ type SetupStage = Box<dyn Fn(&SetupOptions) -> StageOutput + Send>;
 /// Otherwise, it should return a `JoinHandle`, so that the setup process can wait for the task to finish, but not block the main thread so that the setup progress can be reported to the user.
 type StageOutput = Option<JoinHandle<()>>;
 
-fn setup_arch_fs(options: &SetupOptions) -> StageOutput {
+fn setup_root_fs(options: &SetupOptions) -> StageOutput {
     let context = get_application_context();
-    let temp_file = context.data_dir.join("archlinux-fs.tar.xz");
-    let fs_root = Path::new(ARCH_FS_ROOT);
-    let extracted_dir = context.data_dir.join("archlinux-aarch64");
+    let squashfs_path = context.data_dir.join("filesystem.squashfs");
+    let fs_root = Path::new(ROOT_FS_ROOT).to_path_buf();
+    let extracted_dir = context.data_dir.join("rootfs-extracted");
     let mpsc_sender = options.mpsc_sender.clone();
 
     // Only run if the fs_root is missing or empty
@@ -63,88 +62,191 @@ fn setup_arch_fs(options: &SetupOptions) -> StageOutput {
     let need_setup = fs_root.read_dir().map_or(true, |mut d| d.next().is_none());
     if need_setup {
         return Some(thread::spawn(move || {
-            // Download if the archive doesn't exist
             loop {
-                if !temp_file.exists() {
+                if !squashfs_path.exists() {
                     mpsc_sender
                         .send(SetupMessage::Progress(
-                            "Downloading Arch Linux FS...".to_string(),
+                            "Downloading root filesystem...".to_string(),
                         ))
                         .pb_expect("Failed to send log message");
 
-                    let response = reqwest::blocking::get(ARCH_FS_ARCHIVE)
-                        .pb_expect("Failed to download Arch Linux FS");
+                    let client = reqwest::blocking::Client::new();
+                    let mut total_size = 0u64;
+                    let mut unknown_length = false;
+                    for part_url in ROOT_FS_ARCHIVE_PARTS {
+                        match client.head(*part_url).send() {
+                            Ok(response) => {
+                                if let Some(length) = response.content_length() {
+                                    total_size += length;
+                                } else {
+                                    unknown_length = true;
+                                }
+                            }
+                            Err(_) => {
+                                unknown_length = true;
+                            }
+                        }
+                    }
+                    if unknown_length {
+                        total_size = 0;
+                    }
 
-                    let total_size = response.content_length().unwrap_or(0);
-                    let mut file = File::create(&temp_file)
-                        .pb_expect("Failed to create temp file for Arch Linux FS");
+                    let mut file = File::create(&squashfs_path)
+                        .pb_expect("Failed to create temp file for root filesystem");
 
                     let mut downloaded = 0u64;
                     let mut buffer = [0u8; 8192];
-                    let mut reader = response;
-                    let mut last_percent = 0;
+                    let mut last_percent = 0u8;
+                    let mut last_reported_bytes = 0u64;
 
-                    loop {
-                        let n = reader
-                            .read(&mut buffer)
-                            .pb_expect("Failed to read from response");
-                        if n == 0 {
-                            break;
-                        }
-                        file.write_all(&buffer[..n])
-                            .pb_expect("Failed to write to file");
-                        downloaded += n as u64;
-                        if total_size > 0 {
-                            let percent = (downloaded * 100 / total_size).min(100) as u8;
-                            if percent != last_percent {
+                    for part_url in ROOT_FS_ARCHIVE_PARTS {
+                        let response = client
+                            .get(*part_url)
+                            .send()
+                            .pb_expect("Failed to download root filesystem part");
+                        let mut reader = response;
+
+                        loop {
+                            let n = reader
+                                .read(&mut buffer)
+                                .pb_expect("Failed to read from response");
+                            if n == 0 {
+                                break;
+                            }
+                            file.write_all(&buffer[..n])
+                                .pb_expect("Failed to write to file");
+                            downloaded += n as u64;
+
+                            if total_size > 0 {
+                                let percent = (downloaded * 100 / total_size).min(100) as u8;
+                                if percent != last_percent {
+                                    let downloaded_mb = downloaded as f64 / 1024.0 / 1024.0;
+                                    let total_mb = total_size as f64 / 1024.0 / 1024.0;
+                                    mpsc_sender
+                                        .send(SetupMessage::Progress(format!(
+                                            "Downloading root filesystem... {}% ({:.2} MB / {:.2} MB)",
+                                            percent, downloaded_mb, total_mb
+                                        )))
+                                        .unwrap_or(());
+                                    last_percent = percent;
+                                }
+                            } else if downloaded - last_reported_bytes >= 8 * 1024 * 1024 {
                                 let downloaded_mb = downloaded as f64 / 1024.0 / 1024.0;
-                                let total_mb = total_size as f64 / 1024.0 / 1024.0;
                                 mpsc_sender
                                     .send(SetupMessage::Progress(format!(
-                                        "Downloading Arch Linux FS... {}% ({:.2} MB / {:.2} MB)",
-                                        percent, downloaded_mb, total_mb
+                                        "Downloading root filesystem... {:.2} MB",
+                                        downloaded_mb
                                     )))
                                     .unwrap_or(());
-                                last_percent = percent;
+                                last_reported_bytes = downloaded;
                             }
                         }
+                    }
+
+                    if total_size > 0 && downloaded != total_size {
+                        let _ = fs::remove_file(&squashfs_path);
+                        mpsc_sender
+                            .send(SetupMessage::Error(format!(
+                                "Downloaded root filesystem size mismatch ({} / {} bytes). Restarting download...",
+                                downloaded, total_size
+                            )))
+                            .unwrap_or(());
+                        continue;
                     }
                 }
 
                 mpsc_sender
                     .send(SetupMessage::Progress(
-                        "Extracting Arch Linux FS...".to_string(),
+                        "Extracting root filesystem...".to_string(),
                     ))
                     .pb_expect("Failed to send log message");
 
                 // Ensure the extracted directory is clean
                 let _ = fs::remove_dir_all(&extracted_dir);
 
-                // Extract tar file directly to the final destination
-                let tar_file = File::open(&temp_file)
-                    .pb_expect("Failed to open downloaded Arch Linux FS file");
-                let tar = XzDecoder::new(tar_file);
-                let mut archive = Archive::new(tar);
+                let extract_result = (|| -> Result<(), String> {
+                    let squashfs_file = File::open(&squashfs_path)
+                        .map_err(|e| format!("Failed to open root filesystem image: {}", e))?;
+                    let reader = BufReader::new(squashfs_file);
+                    let filesystem = FilesystemReader::from_reader(reader)
+                        .map_err(|e| format!("Failed to read filesystem image: {}", e))?;
 
-                // Try to extract, if it fails, remove temp file and restart download
-                if let Err(e) = archive.unpack(context.data_dir.clone()) {
-                    // Clean up the failed extraction
-                    let _ = fs::remove_dir_all(&extracted_dir);
-                    let _ = fs::remove_file(&temp_file);
+                    for node in filesystem.files() {
+                        if node.fullpath == Path::new("/") {
+                            continue;
+                        }
 
-                    mpsc_sender
-                        .send(SetupMessage::Error(format!(
-                            "Failed to extract Arch Linux FS: {}. Restarting download...",
-                            e
-                        )))
-                        .unwrap_or(());
+                        let relative_path = node
+                            .fullpath
+                            .strip_prefix(Path::new("/"))
+                            .unwrap_or(node.fullpath.as_path());
+                        let output_path = extracted_dir.join(relative_path);
 
-                    // Continue the outer loop to retry the download
-                    continue;
+                        match &node.inner {
+                            InnerNode::Dir(_) => {
+                                fs::create_dir_all(&output_path).map_err(|e| {
+                                    format!(
+                                        "Failed to create directory from filesystem image: {}",
+                                        e
+                                    )
+                                })?;
+                                #[cfg(unix)]
+                                let _ = fs::set_permissions(
+                                    &output_path,
+                                    fs::Permissions::from_mode(node.header.permissions as u32),
+                                );
+                            }
+                            InnerNode::File(file) => {
+                                if let Some(parent) = output_path.parent() {
+                                    fs::create_dir_all(parent).map_err(|e| {
+                                        format!("Failed to create parent directories: {}", e)
+                                    })?;
+                                }
+                                let mut output_file = File::create(&output_path).map_err(|e| {
+                                    format!("Failed to create file from filesystem image: {}", e)
+                                })?;
+                                let mut reader = filesystem.file(file).reader();
+                                std::io::copy(&mut reader, &mut output_file).map_err(|e| {
+                                    format!("Failed to extract file from filesystem image: {}", e)
+                                })?;
+                                #[cfg(unix)]
+                                let _ = fs::set_permissions(
+                                    &output_path,
+                                    fs::Permissions::from_mode(node.header.permissions as u32),
+                                );
+                            }
+                            InnerNode::Symlink(link) => {
+                                if let Some(parent) = output_path.parent() {
+                                    fs::create_dir_all(parent).map_err(|e| {
+                                        format!("Failed to create parent directories: {}", e)
+                                    })?;
+                                }
+                                symlink(&link.link, &output_path).map_err(|e| {
+                                    format!("Failed to create symlink from filesystem image: {}", e)
+                                })?;
+                            }
+                            InnerNode::CharacterDevice(_)
+                            | InnerNode::BlockDevice(_)
+                            | InnerNode::NamedPipe
+                            | InnerNode::Socket => {}
+                        }
+                    }
+                    Ok(())
+                })();
+
+                match extract_result {
+                    Ok(()) => break,
+                    Err(err) => {
+                        let _ = fs::remove_dir_all(&extracted_dir);
+                        let _ = fs::remove_file(&squashfs_path);
+                        mpsc_sender
+                            .send(SetupMessage::Error(format!(
+                                "Failed to extract root filesystem: {}. Restarting download...",
+                                err
+                            )))
+                            .unwrap_or(());
+                    }
                 }
-
-                // If we get here, extraction was successful
-                break;
             }
 
             // Move the extracted files to the final destination
@@ -152,14 +254,14 @@ fn setup_arch_fs(options: &SetupOptions) -> StageOutput {
                 .pb_expect("Failed to rename extracted files to final destination");
 
             // Clean up the temporary file
-            fs::remove_file(&temp_file).pb_expect("Failed to remove temporary file");
+            let _ = fs::remove_file(&squashfs_path);
         }));
     }
     None
 }
 
 fn simulate_linux_sysdata_stage(options: &SetupOptions) -> StageOutput {
-    let fs_root = Path::new(ARCH_FS_ROOT);
+    let fs_root = Path::new(ROOT_FS_ROOT);
     let mpsc_sender = options.mpsc_sender.clone();
 
     if !fs_root.join("proc/.version").exists() {
@@ -208,50 +310,9 @@ fn simulate_linux_sysdata_stage(options: &SetupOptions) -> StageOutput {
     None
 }
 
-fn install_dependencies(options: &SetupOptions) -> StageOutput {
-    let SetupOptions {
-        mpsc_sender,
-        android_app: _,
-    } = options;
-
-    let context = get_application_context();
-    let CommandConfig {
-        check,
-        install,
-        launch: _,
-    } = context.local_config.command;
-
-    let installed = move || {
-        ArchProcess::exec(&check)
-            .wait()
-            .pb_expect("Failed to check whether the installation target is installed")
-            .success()
-    };
-
-    if installed() {
-        return None;
-    }
-
-    let mpsc_sender = mpsc_sender.clone();
-    return Some(thread::spawn(move || {
-        // Install dependencies until `check` succeed
-        loop {
-            ArchProcess::exec_with_panic_on_error("rm -f /var/lib/pacman/db.lck");
-            ArchProcess::exec(&install).with_log(|it| {
-                mpsc_sender
-                    .send(SetupMessage::Progress(it))
-                    .pb_expect("Failed to send log message");
-            });
-            if installed() {
-                break;
-            }
-        }
-    }));
-}
-
 fn setup_firefox_config(_: &SetupOptions) -> StageOutput {
     // Create the Firefox root directory if it doesn't exist
-    let firefox_root = format!("{}/usr/lib/firefox", ARCH_FS_ROOT);
+    let firefox_root = format!("{}/usr/lib/firefox", ROOT_FS_ROOT);
     let _ = fs::create_dir_all(&firefox_root).pb_expect("Failed to create Firefox root directory");
 
     // Create the defaults/pref directory
@@ -279,7 +340,7 @@ defaultPref("security.sandbox.content.level", 0);
 }
 
 fn fix_xkb_symlink(options: &SetupOptions) -> StageOutput {
-    let fs_root = Path::new(ARCH_FS_ROOT);
+    let fs_root = Path::new(ROOT_FS_ROOT);
     let xkb_path = fs_root.join("usr/share/X11/xkb");
     let mpsc_sender = options.mpsc_sender.clone();
 
@@ -288,7 +349,7 @@ fn fix_xkb_symlink(options: &SetupOptions) -> StageOutput {
             if let Ok(target) = fs::read_link(&xkb_path) {
                 if target.is_absolute() {
                     log::info!(
-                        "Absolute symlink target detected: {} -> {}. This is a problem because libxkbcommon is loaded in NDK, whose / is not Arch FS root!",
+                        "Absolute symlink target detected: {} -> {}. This is a problem because libxkbcommon is loaded in NDK, whose / is not the root FS!",
                         xkb_path.display(),
                         target.display()
                     );
@@ -345,9 +406,8 @@ pub fn setup(android_app: AndroidApp) -> PolarBearBackend {
     };
 
     let stages: Vec<SetupStage> = vec![
-        Box::new(setup_arch_fs),                // Step 1. Setup Arch FS (extract)
+        Box::new(setup_root_fs),                // Step 1. Setup root FS (extract)
         Box::new(simulate_linux_sysdata_stage), // Step 2. Simulate Linux system data
-        Box::new(install_dependencies),         // Step 3. Install dependencies
         Box::new(setup_firefox_config),         // Step 4. Setup Firefox config
         Box::new(fix_xkb_symlink),              // Step 5. Fix xkb symlink (last)
     ];

@@ -64,15 +64,15 @@ pub struct CommandConfig {
 }
 
 fn default_check() -> String {
-    "pacman -Qg plasma && pacman -Q konsole && pacman -Q plasma-keyboard".to_string()
+    "pacman -Qg cosmic".to_string()
 }
 
 fn default_install() -> String {
-    "stdbuf -oL pacman -Syu plasma konsole plasma-keyboard --noconfirm --noprogressbar".to_string()
+    "stdbuf -oL pacman -Syu cosmic --noconfirm --noprogressbar".to_string()
 }
 
 fn default_launch() -> String {
-    "XDG_RUNTIME_DIR=/tmp Xwayland -hidpi :1 2>&1 & while [ ! -e /tmp/.X11-unix/X1 ]; do sleep 0.1; done; XDG_SESSION_TYPE=x11 DISPLAY=:1 dbus-launch startplasma-x11 2>&1".to_string()
+    "XDG_RUNTIME_DIR=/tmp WAYLAND_DISPLAY=wayland-0 dbus-launch start-cosmic 2>&1".to_string()
 }
 
 impl Default for CommandConfig {

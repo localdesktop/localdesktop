@@ -1,0 +1,31 @@
+// Some example tasks for common languages.
+//
+// For more documentation on how to configure debug tasks,
+// see: https://zed.dev/docs/debugger
+[
+  {
+    "label": "[Android] Debug (Native/CodeLLDB)",
+    "adapter": "CodeLLDB",
+    "request": "attach",
+    "build": {
+      "command": "bash",
+      "args": [
+        "$ZED_WORKTREE_ROOT/scripts/zed-android-debug-prepare.sh"
+      ]
+    },
+    // Mirrors vscode-android-debug's native attach setup (gdb-remote).
+    "initCommands": [
+      "settings set plugin.jit-loader.gdb.enable off",
+      "process handle SIGBUS SIGSEGV --pass true --stop false --notify false",
+      "breakpoint set --shlib libart.so --name art_sigsegv_fault",
+      "breakpoint set --shlib libart.so --name art_sigbus_fault"
+    ],
+    // Create a target for symbols, then attach by process name (package).
+    "targetCreateCommands": [
+      "target create /Users/teddy/Desktop/github/localdesktop/target/x/debug/android/arm64/cargo/aarch64-linux-android/debug/liblocaldesktop.so"
+    ],
+    "processCreateCommands": [
+      "gdb-remote 127.0.0.1:5039"
+    ]
+  }
+]

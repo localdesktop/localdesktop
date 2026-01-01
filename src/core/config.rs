@@ -1,9 +1,7 @@
-use super::logging::PolarBearExpectation;
 use serde::{Deserialize, Serialize};
 use std::{
     fs::{self, OpenOptions},
     io::Write,
-    path::Path,
 };
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -64,17 +62,17 @@ pub struct CommandConfig {
 }
 
 fn default_check() -> String {
-    "pacman -Qg lxqt && pacman -Q xorg-xwayland && pacman -Q lxqt-wayland-session && pacman -Q labwc && pacman -Q breeze-icons && pacman -Q konsole && pacman -Q plasma-keyboard"
+    "pacman -Qg lxqt && pacman -Q xorg-xwayland && pacman -Q lxqt-wayland-session && pacman -Q labwc && pacman -Q breeze-icons && pacman -Q onboard"
         .to_string()
 }
 
 fn default_install() -> String {
-    "stdbuf -oL pacman -Syu lxqt xorg-xwayland lxqt-wayland-session labwc breeze-icons konsole plasma-keyboard --noconfirm --noprogressbar"
+    "stdbuf -oL pacman -Syu lxqt xorg-xwayland lxqt-wayland-session labwc breeze-icons onboard --noconfirm --noprogressbar"
         .to_string()
 }
 
 fn default_launch() -> String {
-    "XDG_RUNTIME_DIR=/tmp WAYLAND_DISPLAY=wayland-0 dbus-run-session startlxqtwayland 2>&1"
+    "XDG_RUNTIME_DIR=/tmp Xwayland -hidpi :1 2>&1 & while [ ! -e /tmp/.X11-unix/X1 ]; do sleep 0.1; done; XDG_SESSION_TYPE=x11 DISPLAY=:1 dbus-run-session startlxqt 2>&1"
         .to_string()
 }
 
@@ -154,44 +152,10 @@ fn process_config_file(full_config_path: String) -> Vec<String> {
                 }
                 Ok(())
             });
-    } else {
-        // Setup config file
-        save_config(&LocalConfig::default());
     }
 
     // Convert effective config back to lines
     effective_config
-}
-
-pub fn save_config(config: &LocalConfig) {
-    // If Arch FS does not exist or is empty, return early as we don't want to accidentally scaffold the /etc folder insi
-    if Path::new(ARCH_FS_ROOT)
-        .read_dir()
-        .map_or(true, |mut d| d.next().is_none())
-    {
-        return;
-    }
-
-    let config_path = format!("{}{}", ARCH_FS_ROOT, CONFIG_FILE);
-    let config_path = Path::new(&config_path);
-    let config_dir = config_path
-        .parent()
-        .pb_expect("Failed to get parent directory");
-
-    // If the file already exists, rename it to .bak
-    if config_path.exists() {
-        let backup_path = config_path.with_extension("bak");
-        if let Err(err) = fs::rename(config_path, &backup_path) {
-            log::warn!("Failed to create backup of existing config: {}", err);
-        }
-    }
-
-    // Create config directory if it doesn't exist
-    fs::create_dir_all(config_dir).pb_expect("Failed to create config directory");
-
-    // Create and write config file
-    let config_str = toml::to_string(config).pb_expect("Failed to serialize config");
-    fs::write(config_path, config_str).pb_expect("Failed to write config file");
 }
 
 pub fn parse_config(full_config_path: String) -> LocalConfig {
@@ -200,9 +164,8 @@ pub fn parse_config(full_config_path: String) -> LocalConfig {
     if let Ok(config) = toml::from_str::<LocalConfig>(&content) {
         return config;
     }
-    // Config malformed, giving back the default config so that the user can modify it again
+    // Config malformed, use the default config and the user can modify it again
     let default_config = LocalConfig::default();
-    save_config(&default_config);
     default_config
 }
 

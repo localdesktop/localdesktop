@@ -21,12 +21,7 @@
       "type": "shell",
       "label": "[Android] Build Debug",
       "command": "~/.cargo/bin/x",
-      "args": [
-        "build",
-        "--platform=android",
-        "--arch=arm64",
-        "--format=apk"
-      ],
+      "args": ["build", "--platform=android", "--arch=arm64", "--format=apk"],
       "group": {
         "kind": "build",
         "isDefault": false
@@ -36,10 +31,7 @@
       "type": "shell",
       "label": "[Android] Logcat",
       "command": "sh",
-      "args": [
-        "-c",
-        "adb logcat -c && adb logcat -e app.polarbear"
-      ]
+      "args": ["-c", "adb logcat -c && adb logcat -s RustStdoutStderr"]
     }
   ]
 }

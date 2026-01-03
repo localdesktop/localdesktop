@@ -26,6 +26,8 @@ impl ArchProcess {
     }
 
     fn with_args(mut process: Command) -> Command {
+        let context = get_application_context();
+
         process
             .arg("-r")
             .arg(config::ARCH_FS_ROOT)
@@ -37,9 +39,15 @@ impl ArchProcess {
             .arg("--bind=/dev")
             .arg("--bind=/proc")
             .arg("--bind=/sys")
-            .arg(format!("--bind={}/tmp:/dev/shm", config::ARCH_FS_ROOT))
-            .arg("--bind=/sdcard:/root/Android")
-            .arg("--bind=/sdcard:/android")
+            .arg(format!("--bind={}/tmp:/dev/shm", config::ARCH_FS_ROOT));
+
+        if context.permission_all_files_access {
+            process
+                .arg("--bind=/sdcard:/android")
+                .arg("--bind=/sdcard:/root/Android");
+        }
+
+        process
             .arg("--bind=/dev/urandom:/dev/random")
             .arg("--bind=/proc/self/fd:/dev/fd")
             .arg("--bind=/proc/self/fd/0:/dev/stdin")

@@ -14,7 +14,7 @@ use crate::{
         logging::PolarBearExpectation,
     },
 };
-use jni::objects::{JObject, JString};
+use jni::objects::JObject;
 use jni::sys::_jobject;
 use pathdiff::diff_paths;
 use smithay::utils::Clock;
@@ -703,86 +703,6 @@ fn fix_xkb_symlink(options: &SetupOptions) -> StageOutput {
     None
 }
 
-fn request_all_files_access(options: &SetupOptions) -> StageOutput {
-    let android_app = options.android_app.clone();
-    let mpsc_sender = options.mpsc_sender.clone();
-    run_in_jvm(
-        |env, _| {
-            let already_granted = env
-                .call_static_method(
-                    "android/os/Environment",
-                    "isExternalStorageManager",
-                    "()Z",
-                    &[],
-                )
-                .and_then(|value| value.z())
-                .unwrap_or(false);
-
-            if already_granted {
-                return;
-            }
-
-            let activity_obj =
-                unsafe { JObject::from_raw(android_app.activity_as_ptr() as *mut _jobject) };
-
-            mpsc_sender
-                .send(SetupMessage::Progress(
-                    "Requesting all files access permission...".to_string(),
-                ))
-                .unwrap_or(());
-
-            let package_name_obj = env
-                .call_method(&activity_obj, "getPackageName", "()Ljava/lang/String;", &[])
-                .pb_expect("Failed to get package name")
-                .l()
-                .pb_expect("Failed to read package name");
-            let package_name: String = env
-                .get_string(&JString::from(package_name_obj))
-                .pb_expect("Failed to convert package name to string")
-                .into();
-
-            let uri_string = env
-                .new_string(format!("package:{}", package_name))
-                .pb_expect("Failed to build package Uri string");
-            let uri_obj = env
-                .call_static_method(
-                    "android/net/Uri",
-                    "parse",
-                    "(Ljava/lang/String;)Landroid/net/Uri;",
-                    &[(&uri_string).into()],
-                )
-                .pb_expect("Failed to parse package Uri")
-                .l()
-                .pb_expect("Failed to read package Uri");
-
-            if let Ok(action) = env.new_string("ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION") {
-                if let Ok(intent) = env.new_object(
-                    "android/content/Intent",
-                    "(Ljava/lang/String;Landroid/net/Uri;)V",
-                    &[(&action).into(), (&uri_obj).into()],
-                ) {
-                    let _ = env.call_method(
-                        &activity_obj,
-                        "startActivity",
-                        "(Landroid/content/Intent;)V",
-                        &[(&intent).into()],
-                    );
-                    if env.exception_check().unwrap_or(false) {
-                        let _ = env.exception_describe();
-                        let _ = env.exception_clear();
-                        let _ = mpsc_sender
-                            .send(SetupMessage::Error(
-                                "Failed to request \"Allow access to manage all files\" permission. Please grant it manually in the app settings. Tips: go to Settings -> search for \"all files access\" -> find Local Desktop -> enable!".to_string(
-                            )));
-                    }
-                }
-            }
-        },
-        android_app.clone(),
-    );
-    None
-}
-
 pub fn setup(android_app: AndroidApp) -> PolarBearBackend {
     let (sender, receiver) = mpsc::channel();
     let progress = Arc::new(Mutex::new(0));
@@ -812,7 +732,6 @@ pub fn setup(android_app: AndroidApp) -> PolarBearBackend {
         Box::new(install_dependencies),         // Step 3. Install dependencies
         Box::new(setup_firefox_config),         // Step 4. Setup Firefox config
         Box::new(setup_lxqt_scaling),           // Step 5. Setup LXQt HiDPI scaling
-        Box::new(request_all_files_access),     // Step 5. Request manage all files access
         Box::new(fix_xkb_symlink),              // Step 6. Fix xkb symlink (last)
     ];
 

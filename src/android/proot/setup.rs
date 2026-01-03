@@ -14,7 +14,8 @@ use crate::{
         logging::PolarBearExpectation,
     },
 };
-use jni::{objects::JObject, sys::_jobject};
+use jni::objects::{JObject, JString};
+use jni::sys::_jobject;
 use pathdiff::diff_paths;
 use smithay::utils::Clock;
 use std::{
@@ -23,6 +24,7 @@ use std::{
     os::unix::fs::{symlink, PermissionsExt},
     path::Path,
     sync::{
+        atomic::{AtomicBool, Ordering},
         mpsc::{self, Sender},
         Arc, Mutex,
     },
@@ -702,6 +704,105 @@ fn fix_xkb_symlink(options: &SetupOptions) -> StageOutput {
     None
 }
 
+fn request_all_files_access(options: &SetupOptions) -> StageOutput {
+    let android_app = options.android_app.clone();
+    let mpsc_sender = options.mpsc_sender.clone();
+    let fs_root = Path::new(ARCH_FS_ROOT).to_path_buf();
+    let permission_granted = Arc::new(AtomicBool::new(false));
+
+    let _ = fs::create_dir_all(fs_root.join("root/android"));
+
+    let permission_granted_check = permission_granted.clone();
+    run_in_jvm(
+        |env, _| {
+            let already_granted = env
+                .call_static_method(
+                    "android/os/Environment",
+                    "isExternalStorageManager",
+                    "()Z",
+                    &[],
+                )
+                .and_then(|value| value.z())
+                .unwrap_or(false);
+            permission_granted_check.store(already_granted, Ordering::SeqCst);
+        },
+        android_app.clone(),
+    );
+
+    if permission_granted.load(Ordering::SeqCst) {
+        return None;
+    }
+
+    Some(thread::spawn(move || {
+        run_in_jvm(
+            |env, android_app| {
+                let activity_obj =
+                    unsafe { JObject::from_raw(android_app.activity_as_ptr() as *mut _jobject) };
+
+                mpsc_sender
+                    .send(SetupMessage::Progress(
+                        "Requesting all files access permission...".to_string(),
+                    ))
+                    .unwrap_or(());
+
+                let package_name_obj = env
+                    .call_method(&activity_obj, "getPackageName", "()Ljava/lang/String;", &[])
+                    .pb_expect("Failed to get package name")
+                    .l()
+                    .pb_expect("Failed to read package name");
+                let package_name: String = env
+                    .get_string(&JString::from(package_name_obj))
+                    .pb_expect("Failed to convert package name to string")
+                    .into();
+
+                let uri_string = env
+                    .new_string(format!("package:{}", package_name))
+                    .pb_expect("Failed to build package Uri string");
+                let uri_obj = env
+                    .call_static_method(
+                        "android/net/Uri",
+                        "parse",
+                        "(Ljava/lang/String;)Landroid/net/Uri;",
+                        &[(&uri_string).into()],
+                    )
+                    .pb_expect("Failed to parse package Uri")
+                    .l()
+                    .pb_expect("Failed to read package Uri");
+
+                let action = env
+                    .new_string(
+                        "android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION",
+                    )
+                    .pb_expect("Failed to build app manage all files action");
+                let intent = env
+                    .new_object(
+                        "android/content/Intent",
+                        "(Ljava/lang/String;Landroid/net/Uri;)V",
+                        &[(&action).into(), (&uri_obj).into()],
+                    )
+                    .pb_expect("Failed to create app manage all files intent");
+
+                let _ = env.call_method(
+                    &activity_obj,
+                    "startActivity",
+                    "(Landroid/content/Intent;)V",
+                    &[(&intent).into()],
+                );
+                if env.exception_check().unwrap_or(false) {
+                    let _ = env.exception_describe();
+                    let _ = env.exception_clear();
+                    mpsc_sender
+                        .send(SetupMessage::Error(
+                            "Unable to open manage all files settings.".to_string(),
+                        ))
+                        .unwrap_or(());
+                }
+            },
+            android_app,
+        );
+    }))
+}
+
 pub fn setup(android_app: AndroidApp) -> PolarBearBackend {
     let (sender, receiver) = mpsc::channel();
     let progress = Arc::new(Mutex::new(0));
@@ -731,6 +832,7 @@ pub fn setup(android_app: AndroidApp) -> PolarBearBackend {
         Box::new(install_dependencies),         // Step 3. Install dependencies
         Box::new(setup_firefox_config),         // Step 4. Setup Firefox config
         Box::new(setup_lxqt_scaling),           // Step 5. Setup LXQt HiDPI scaling
+        Box::new(request_all_files_access),     // Step 5. Request manage all files access
         Box::new(fix_xkb_symlink),              // Step 6. Fix xkb symlink (last)
     ];
 

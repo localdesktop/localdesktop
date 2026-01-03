@@ -38,6 +38,7 @@ impl ArchProcess {
             .arg("--bind=/proc")
             .arg("--bind=/sys")
             .arg(format!("--bind={}/tmp:/dev/shm", config::ARCH_FS_ROOT))
+            .arg("--bind=/sdcard:/root/android")
             .arg("--bind=/dev/urandom:/dev/random")
             .arg("--bind=/proc/self/fd:/dev/fd")
             .arg("--bind=/proc/self/fd/0:/dev/stdin")

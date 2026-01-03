@@ -1,6 +1,9 @@
-use crate::core::{
-    config::{parse_config, LocalConfig, ARCH_FS_ROOT, CONFIG_FILE},
-    logging::PolarBearExpectation,
+use crate::{
+    android::utils::ndk::run_in_jvm,
+    core::{
+        config::{parse_config, LocalConfig, ARCH_FS_ROOT, CONFIG_FILE},
+        logging::PolarBearExpectation,
+    },
 };
 use jni::{
     objects::{JObject, JString},
@@ -16,6 +19,7 @@ pub struct ApplicationContext {
     pub data_dir: PathBuf,
     pub native_library_dir: PathBuf,
     pub local_config: LocalConfig,
+    pub permission_all_files_access: bool,
 }
 
 impl ApplicationContext {
@@ -34,6 +38,7 @@ impl ApplicationContext {
         let native_library_dir = Self::get_native_library_dir(&mut env, &activity);
         let full_config_path = format!("{}{}", ARCH_FS_ROOT, CONFIG_FILE);
         let local_config = parse_config(full_config_path);
+        let permission_all_files_access = Self::is_all_files_access_granted(android_app);
 
         {
             let mut context = APPLICATION_CONTEXT
@@ -44,6 +49,7 @@ impl ApplicationContext {
                 data_dir,
                 native_library_dir,
                 local_config,
+                permission_all_files_access,
             });
             log::info!(
                 "ApplicationContext initialized: {:?}",
@@ -91,6 +97,24 @@ impl ApplicationContext {
             .pb_expect("Failed to convert native library dir to string")
             .into();
         PathBuf::from(path)
+    }
+
+    fn is_all_files_access_granted(android_app: &AndroidApp) -> bool {
+        // To determine whether your app has been granted the MANAGE_EXTERNAL_STORAGE permission, call Environment.isExternalStorageManager().
+        // Source: https://developer.android.com/training/data-storage/manage-all-files
+        run_in_jvm(
+            |env, _| {
+                env.call_static_method(
+                    "android/os/Environment",
+                    "isExternalStorageManager",
+                    "()Z",
+                    &[],
+                )
+                .and_then(|value| value.z())
+                .unwrap_or(false)
+            },
+            android_app.clone(),
+        )
     }
 }
 

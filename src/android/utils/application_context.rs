@@ -100,6 +100,10 @@ impl ApplicationContext {
     }
 
     fn is_all_files_access_granted(android_app: &AndroidApp) -> bool {
+        // `isExternalStorageManager` was Added in API level 30
+        if AndroidApp::sdk_version() < 30 {
+            return true; // Just because we cannot check, does not mean we do not have it, and there is no issue of binding to /sdcard without permission
+        }
         // To determine whether your app has been granted the MANAGE_EXTERNAL_STORAGE permission, call Environment.isExternalStorageManager().
         // Source: https://developer.android.com/training/data-storage/manage-all-files
         run_in_jvm(

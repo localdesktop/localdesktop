@@ -2222,14 +2222,19 @@ pub mod apk {
                             index.push(entry);
                         }
                         let mut entries = Vec::with_capacity(type_header.entry_count as usize);
+                        let entries_base = start_pos + type_header.entries_start as u64;
                         for offset in &index {
                             if *offset == 0xffff_ffff {
                                 entries.push(None);
                             } else {
+                                // Entry offsets are relative to entries_start, not the index table.
+                                let entry_pos = entries_base + *offset as u64;
+                                r.seek(SeekFrom::Start(entry_pos))?;
                                 let entry = ResTableEntry::read(r)?;
                                 entries.push(Some(entry));
                             }
                         }
+                        r.seek(SeekFrom::Start(end_pos))?;
                         Ok(Chunk::TableType(type_header, index, entries))
                     }
                     Some(ChunkType::TableTypeSpec) => {

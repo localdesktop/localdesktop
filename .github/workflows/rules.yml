@@ -11,6 +11,9 @@ on:
   push:
     branches:
       - main
+    paths:
+      - "src/**"
+      - "!src/bin/**"
 
 jobs:
   check-version-bump:

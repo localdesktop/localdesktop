@@ -18,6 +18,26 @@ _Proof of Concept: A Pixel Tablet running the XFCE desktop environment inside a 
 
 ### How to build an APK
 
+#### Termux
+
+You can build the Local Desktop APK directly on your Android device. This is simple because no cross-compilation is needed. However, we only ship prebuilt libs for arm64, so this option only works on ARM64.
+Make sure you have Rust installed in Termux:
+
+```
+pkg i rust
+```
+
+Then run `cargo run` in the project folder:
+
+```bash
+cargo run
+```
+
+After the build succeeds, you will find `localdesktop.apk` in the current folder. You can install it with `termux-open localdesktop.apk`, but in some cases you may need to `mv localdesktop.apk ~/storage/downloads` and install it from there. Make sure you have run `termux-setup-storage` before moving it outside Termux.
+
+#### Linux/Mac/Windows
+
+The above option is suitable for quick development on Android. However, if you need to build an AAB (for distribution to Google Play), debug with Visual Studio Code, or compile for unsupported targets (like x64 Android), then you need to cross-build it from your PC.
 Along with Rust, please make sure you have these components installed:
 
 ```
@@ -40,6 +60,21 @@ open target/x/release/android/gradle/app/build/outputs/apk/debug/
 ```
 
 ### How to develop
+
+#### Termux
+
+We recommend the following setup, but feel free to use your own favorite tools for development:
+
+```
+pkg install helix helix-grammars rust-analyzer
+```
+
+A wonderful thing about developing directly on Android is that an agent like [Codex on Termux](https://github.com/DioNanos/codex-termux) can **test the code for you** by running unit tests, reading the output, understanding what went wrong, and trying again. In my experience, this is not possible when cross-developing on other operating systems, so you have to run the tests yourself.
+
+![Developing on Android](./assets/docs/dev-from-android.webp)
+
+
+#### Linux/Mac/Windows
 
 Recommended setup:
 

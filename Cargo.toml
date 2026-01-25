@@ -1,6 +1,6 @@
 [package]
 name = "localdesktop"
-version = "1.4.8"
+version = "1.4.9"
 edition = "2021"
 build = "build.rs"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -50,17 +50,34 @@ smithay = { version = "0.5.0", default-features = false, features = [
 [target.'cfg(not(target_os = "android"))'.dependencies] # Deps used only for setting up cross testing
 
 [dependencies] # Deps used for both target
+anyhow = "1.0.68"
+android-sdkmanager-rs = "0.5.0"
+byteorder = "1.4.3"
+dunce = "1.0.3"
+image = { version = "0.24.5", default-features = false, features = [
+    "png",
+    "webp",
+] }
 log = "0.4"
-tar = "0.4.43"
-xz2 = "0.1.7"
+pem = "1.1.0"
+quick-xml = { version = "0.26.0", features = ["serialize"] }
+rasn = "0.6.1"
+rasn-pkix = "0.6.0"
 reqwest = { version = "0.12.20", default-features = false, features = [
     "blocking",
     "rustls-tls",
 ] }
-toml = "0.8.12"
+roxmltree = "0.16.0"
+rsa = "0.7.2"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+serde_yaml = "0.9.16"
+sha2 = { version = "0.10.6", features = ["oid"] }
+tar = "0.4.43"
 tempfile = "3.20.0"
+toml = "0.8.12"
+xz2 = "0.1.7"
+zip = { version = "0.6.3", default-features = false, features = ["deflate"] }
 
 [patch.crates-io]
 smithay = { path = "patches/smithay" }

@@ -1,6 +1,6 @@
 [package]
 name = "localdesktop"
-version = "1.4.8"
+version = "1.4.9"
 edition = "2021"
 build = "build.rs"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -51,6 +51,7 @@ smithay = { version = "0.5.0", default-features = false, features = [
 
 [dependencies] # Deps used for both target
 anyhow = "1.0.68"
+android-sdkmanager-rs = "0.5.0"
 byteorder = "1.4.3"
 dunce = "1.0.3"
 image = { version = "0.24.5", default-features = false, features = [

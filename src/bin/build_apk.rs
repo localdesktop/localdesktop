@@ -10,6 +10,7 @@ pub mod apk {
     use serde::Deserialize;
     use sha2::{Digest, Sha256};
     use std::collections::HashSet;
+    use std::env;
     use std::fs::{self, File};
     use std::io::{Cursor, Read, Seek, SeekFrom, Write};
     use std::path::{Path, PathBuf};
@@ -135,7 +136,7 @@ pub mod apk {
     }
 
     pub fn build() -> Result<()> {
-        let mut release = false;
+        let mut release = true;
         let mut manifest_path = PathBuf::from("manifest.yaml");
         let mut out_path = None;
         let mut android_jar_override = None;
@@ -143,6 +144,7 @@ pub mod apk {
         while let Some(arg) = args.next() {
             match arg.as_str() {
                 "--release" => release = true,
+                "--debug" => release = false,
                 "--manifest" => {
                     manifest_path = PathBuf::from(
                         args.next()
@@ -162,7 +164,7 @@ pub mod apk {
                 }
                 "-h" | "--help" => {
                     println!(
-                    "Usage: cargo run --bin build -- [--release] [--manifest PATH] [--out PATH] [--android-jar PATH]"
+                    "Usage: cargo run -- [--release] [--debug] [--manifest PATH] [--out PATH] [--android-jar PATH]"
                 );
                     return Ok(());
                 }
@@ -186,6 +188,7 @@ pub mod apk {
         };
 
         let mut android = config.android.unwrap_or_default();
+        android.gradle = false;
         let wry = android.wry;
         let assets = std::mem::take(&mut android.assets);
         let icon = android.generic.icon.take().or(config.generic.icon);
@@ -216,19 +219,26 @@ pub mod apk {
                 manifest.version_code = Some(code.to_code(1));
             }
         }
-        let target_sdk = manifest.sdk.target_sdk_version.unwrap_or(33);
-        if manifest.sdk.min_sdk_version.is_none() {
-            manifest.sdk.min_sdk_version = Some(21);
-        }
-        if manifest.sdk.target_sdk_version.is_none() {
-            manifest.sdk.target_sdk_version = Some(target_sdk);
-        }
-        if manifest.compile_sdk_version.is_none() {
-            manifest.compile_sdk_version = Some(target_sdk);
-        }
-        if manifest.platform_build_version_code.is_none() {
-            manifest.platform_build_version_code = Some(target_sdk);
-        }
+        let target_sdk_version = 33;
+        let target_sdk_codename = 13;
+        let min_sdk_version = 21;
+        manifest
+            .compile_sdk_version
+            .get_or_insert(target_sdk_version);
+        manifest
+            .platform_build_version_code
+            .get_or_insert(target_sdk_version);
+        manifest
+            .compile_sdk_version_codename
+            .get_or_insert(target_sdk_codename);
+        manifest
+            .platform_build_version_name
+            .get_or_insert(target_sdk_codename);
+        manifest
+            .sdk
+            .target_sdk_version
+            .get_or_insert(target_sdk_version);
+        manifest.sdk.min_sdk_version.get_or_insert(min_sdk_version);
 
         let app = &mut manifest.application;
         if app.label.is_none() {
@@ -287,30 +297,17 @@ pub mod apk {
         if activity.exported.is_none() {
             activity.exported = Some(true);
         }
-        if !wry
-            && !activity
-                .meta_data
-                .iter()
-                .any(|meta| meta.name == "android.app.lib_name")
-        {
+        if !wry {
             activity.meta_data.push(MetaData {
                 name: "android.app.lib_name".into(),
                 value: lib_name.clone(),
             });
         }
-        let has_main_intent = activity.intent_filters.iter().any(|filter| {
-            filter
-                .actions
-                .iter()
-                .any(|action| action == "android.intent.action.MAIN")
+        activity.intent_filters.push(IntentFilter {
+            actions: vec!["android.intent.action.MAIN".into()],
+            categories: vec!["android.intent.category.LAUNCHER".into()],
+            data: vec![],
         });
-        if !has_main_intent {
-            activity.intent_filters.push(IntentFilter {
-                actions: vec!["android.intent.action.MAIN".into()],
-                categories: vec!["android.intent.category.LAUNCHER".into()],
-                data: vec![],
-            });
-        }
 
         let mut cargo = Command::new("cargo");
         cargo.arg("build").arg("--lib");
@@ -347,48 +344,19 @@ pub mod apk {
             arch => bail!("unsupported host arch `{arch}`"),
         };
 
-        let out_path = out_path.unwrap_or_else(|| {
-            target_dir
-                .join("x")
-                .join(if release { "release" } else { "debug" })
-                .join("android")
-                .join(format!("{package_name}.apk"))
-        });
+        let out_path = out_path.unwrap_or_else(|| root.join(format!("{package_name}.apk")));
         if let Some(parent) = out_path.parent() {
             fs::create_dir_all(parent)?;
         }
 
-        let android_jar = if let Some(mut path) = android_jar_override {
-            if !path.is_absolute() {
-                path = root.join(path);
-            }
-            path
-        } else if let Ok(env_path) = std::env::var("ANDROID_JAR") {
-            PathBuf::from(env_path)
-        } else if let Ok(android_home) = std::env::var("ANDROID_HOME") {
-            let platforms = Path::new(&android_home).join("platforms");
-            let mut candidates = vec![];
-            if platforms.exists() {
-                for entry in fs::read_dir(&platforms)? {
-                    let entry = entry?;
-                    let candidate = entry.path().join("android.jar");
-                    if candidate.exists() {
-                        candidates.push(candidate);
-                    }
-                }
-            }
-            candidates.sort();
-            candidates
-                .pop()
-                .context("No android.jar found under ANDROID_HOME/platforms")?
-        } else {
-            let framework_res = PathBuf::from("/system/framework/framework-res.apk");
-            if framework_res.exists() {
-                framework_res
-            } else {
-                bail!("android.jar not found; set ANDROID_JAR or ANDROID_HOME")
-            }
-        };
+        let android_jar = ensure_android_jar(
+            &root,
+            manifest
+                .sdk
+                .target_sdk_version
+                .unwrap_or(33),
+            android_jar_override,
+        )?;
 
         let mut apk = Apk::new(out_path.clone(), manifest, release)?;
 
@@ -450,7 +418,9 @@ pub mod apk {
         pub fn add_res(&mut self, icon: Option<&Path>, android: &Path) -> Result<()> {
             let mut buf = vec![];
             let mut table = Table::default();
-            table.import_apk(android)?;
+            table
+                .import_apk(android)
+                .with_context(|| format!("Failed to parse `{}`", android.display()))?;
             if let Some(path) = icon {
                 let mut scaler = Scaler::open(path)?;
                 scaler.optimize();
@@ -1805,12 +1775,30 @@ pub mod apk {
                 let flags = r.read_u16::<LittleEndian>()?;
                 let key = r.read_u32::<LittleEndian>()?;
                 let is_complex = flags & 0x1 > 0;
-                if is_complex {
-                    debug_assert_eq!(size, 16);
+                let value = if is_complex {
+                    if size < 16 {
+                        anyhow::bail!("invalid ResTableEntry size: {size}");
+                    }
+                    let entry = ResTableMapEntry::read(r)?;
+                    if size > 16 {
+                        let mut extra = vec![0; (size - 16) as usize];
+                        r.read_exact(&mut extra)?;
+                    }
+                    let mut map = Vec::with_capacity(entry.count as usize);
+                    for _ in 0..entry.count {
+                        map.push(ResTableMap::read(r)?);
+                    }
+                    ResTableValue::Complex(entry, map)
                 } else {
-                    debug_assert_eq!(size, 8);
-                }
-                let value = ResTableValue::read(r, is_complex)?;
+                    if size < 8 {
+                        anyhow::bail!("invalid ResTableEntry size: {size}");
+                    }
+                    if size > 8 {
+                        let mut extra = vec![0; (size - 8) as usize];
+                        r.read_exact(&mut extra)?;
+                    }
+                    ResTableValue::Simple(ResValue::read(r)?)
+                };
                 Ok(Self {
                     size,
                     flags,
@@ -1874,10 +1862,13 @@ pub mod apk {
         impl ResValue {
             pub fn read(r: &mut impl Read) -> Result<Self> {
                 let size = r.read_u16::<LittleEndian>()?;
-                debug_assert_eq!(size, 8);
                 let res0 = r.read_u8()?;
                 let data_type = r.read_u8()?;
                 let data = r.read_u32::<LittleEndian>()?;
+                if size > 8 {
+                    let mut extra = vec![0; (size - 8) as usize];
+                    r.read_exact(&mut extra)?;
+                }
                 Ok(Self {
                     size,
                     res0,
@@ -2216,26 +2207,67 @@ pub mod apk {
                     Some(ChunkType::TableType) => {
                         tracing::trace!("table type");
                         let type_header = ResTableTypeHeader::read(r)?;
-                        let mut index = Vec::with_capacity(type_header.entry_count as usize);
-                        for _ in 0..type_header.entry_count {
-                            let entry = r.read_u32::<LittleEndian>()?;
-                            index.push(entry);
-                        }
-                        let mut entries = Vec::with_capacity(type_header.entry_count as usize);
-                        let entries_base = start_pos + type_header.entries_start as u64;
-                        for offset in &index {
-                            if *offset == 0xffff_ffff {
-                                entries.push(None);
-                            } else {
-                                // Entry offsets are relative to entries_start, not the index table.
-                                let entry_pos = entries_base + *offset as u64;
+                            let is_sparse = type_header.res1 & 0x1 != 0;
+                            if is_sparse {
+                            let entries_base = start_pos + type_header.entries_start as u64;
+                                let mut sparse = Vec::with_capacity(type_header.entry_count as usize);
+                                for _ in 0..type_header.entry_count {
+                                    let idx = r.read_u16::<LittleEndian>()?;
+                                let offset = r.read_u16::<LittleEndian>()?;
+                                sparse.push((idx, offset));
+                            }
+                            let max_idx = sparse
+                                .iter()
+                                .map(|(idx, _)| *idx)
+                                .max()
+                                .unwrap_or(0);
+                            let mut entries = vec![None; max_idx as usize + 1];
+                            for (idx, offset) in sparse {
+                                let entry_pos = entries_base + (offset as u64) * 4;
                                 r.seek(SeekFrom::Start(entry_pos))?;
                                 let entry = ResTableEntry::read(r)?;
-                                entries.push(Some(entry));
+                                entries[idx as usize] = Some(entry);
                             }
+                            r.seek(SeekFrom::Start(end_pos))?;
+                            Ok(Chunk::TableType(type_header, Vec::new(), entries))
+                        } else {
+                            let mut index = Vec::with_capacity(type_header.entry_count as usize);
+                            let index_table_bytes = type_header
+                                .entries_start
+                                .saturating_sub(header.header_size as u32);
+                            let index_entry_size = if type_header.entry_count == 0 {
+                                0
+                            } else {
+                                index_table_bytes / type_header.entry_count
+                            };
+                            for _ in 0..type_header.entry_count {
+                                if index_entry_size == 2 {
+                                    let entry = r.read_u16::<LittleEndian>()?;
+                                    if entry == 0xffff {
+                                        index.push(0xffff_ffff);
+                                    } else {
+                                        index.push(u32::from(entry) * 4);
+                                    }
+                                } else {
+                                    let entry = r.read_u32::<LittleEndian>()?;
+                                    index.push(entry);
+                                }
+                            }
+                            let entries_base = start_pos + type_header.entries_start as u64;
+                            let mut entries = Vec::with_capacity(type_header.entry_count as usize);
+                            for offset in &index {
+                                if *offset == 0xffff_ffff {
+                                    entries.push(None);
+                                } else {
+                                    let entry_pos = entries_base + *offset as u64;
+                                    r.seek(SeekFrom::Start(entry_pos))?;
+                                    let entry = ResTableEntry::read(r)?;
+                                    entries.push(Some(entry));
+                                }
+                            }
+                            r.seek(SeekFrom::Start(end_pos))?;
+                            Ok(Chunk::TableType(type_header, index, entries))
                         }
-                        r.seek(SeekFrom::Start(end_pos))?;
-                        Ok(Chunk::TableType(type_header, index, entries))
                     }
                     Some(ChunkType::TableTypeSpec) => {
                         tracing::trace!("table type spec");
@@ -2658,7 +2690,9 @@ pub mod apk {
         }
 
         pub fn sign(path: &Path, signer: Option<Signer>) -> Result<()> {
-            let signer = signer.map(Ok).unwrap_or_else(|| Signer::new(DEBUG_PEM))?;
+            let signer = signer
+                .map(Ok)
+                .unwrap_or_else(|| Signer::new(&normalize_pem(DEBUG_PEM)))?;
             let apk = std::fs::read(path)?;
             let mut r = Cursor::new(&apk);
             let block = parse_apk_signing_block(&mut r)?;
@@ -2676,6 +2710,10 @@ pub mod apk {
             f.seek(SeekFrom::Start(cde_start + 16))?;
             f.write_u32::<LittleEndian>(cd_start as u32)?;
             Ok(())
+        }
+
+        fn normalize_pem(pem: &str) -> String {
+            pem.lines().map(|line| line.trim()).collect::<Vec<_>>().join("\n")
         }
 
         fn compute_digest<R: Read + Seek>(
@@ -3026,26 +3064,32 @@ pub mod apk {
                 value: &str,
                 strings: &Strings,
             ) -> Result<ResValue> {
-                let entry = table.entry_by_ref(Ref::attr(name))?;
-                let attr_type = entry.attribute_type().unwrap();
+                let attr_type = table
+                    .entry_by_ref(Ref::attr(name))
+                    .ok()
+                    .and_then(|entry| entry.attribute_type());
                 let (data, data_type) = match attr_type {
-                    ResAttributeType::Reference => {
+                    Some(ResAttributeType::Reference) => {
                         let id = table.entry_by_ref(Ref::parse(value)?)?.id();
                         (u32::from(id), ResValueType::Reference)
                     }
-                    ResAttributeType::String => (strings.id(value) as u32, ResValueType::String),
-                    ResAttributeType::Integer => (value.parse()?, ResValueType::IntDec),
-                    ResAttributeType::Boolean => match value {
+                    Some(ResAttributeType::String) => {
+                        (strings.id(value) as u32, ResValueType::String)
+                    }
+                    Some(ResAttributeType::Integer) => (value.parse()?, ResValueType::IntDec),
+                    Some(ResAttributeType::Boolean) => match value {
                         "true" => (0xffff_ffff, ResValueType::IntBoolean),
                         "false" => (0x0000_0000, ResValueType::IntBoolean),
                         _ => anyhow::bail!("expected boolean"),
                     },
-                    ResAttributeType::Enum => {
+                    Some(ResAttributeType::Enum) => {
+                        let entry = table.entry_by_ref(Ref::attr(name))?;
                         let id = table.entry_by_ref(Ref::id(value))?.id();
                         let value = entry.lookup_value(id).unwrap();
                         (value.data, ResValueType::from_u8(value.data_type).unwrap())
                     }
-                    ResAttributeType::Flags => {
+                    Some(ResAttributeType::Flags) => {
+                        let entry = table.entry_by_ref(Ref::attr(name))?;
                         let mut data = 0;
                         let mut data_type = ResValueType::Null;
                         for flag in value.split('|') {
@@ -3056,7 +3100,7 @@ pub mod apk {
                         }
                         (data, data_type)
                     }
-                    _ => anyhow::bail!("unsupported attribute type"),
+                    _ => fallback_attr_value(name, value, strings)?,
                 };
                 Ok(ResValue {
                     size: 8,
@@ -3064,6 +3108,38 @@ pub mod apk {
                     data_type: data_type as u8,
                     data,
                 })
+            }
+
+            fn fallback_attr_value(
+                name: &str,
+                value: &str,
+                strings: &Strings,
+            ) -> Result<(u32, ResValueType)> {
+                if value == "true" {
+                    return Ok((0xffff_ffff, ResValueType::IntBoolean));
+                }
+                if value == "false" {
+                    return Ok((0x0000_0000, ResValueType::IntBoolean));
+                }
+                if let Ok(num) = value.parse::<u32>() {
+                    return Ok((num, ResValueType::IntDec));
+                }
+                if let Some(id) = resource_id_from_ref(value) {
+                    return Ok((id, ResValueType::Reference));
+                }
+                if name == "configChanges" || value.contains('|') {
+                    return Ok((strings.id(value) as u32, ResValueType::String));
+                }
+                Ok((strings.id(value) as u32, ResValueType::String))
+            }
+
+            fn resource_id_from_ref(value: &str) -> Option<u32> {
+                let value = value.strip_prefix('@')?;
+                let (ty, entry) = value.split_once('/')?;
+                if ty == "mipmap" && entry == "icon" {
+                    return Some(0x7f01_0000);
+                }
+                None
             }
 
             pub struct StringPoolBuilder<'a> {
@@ -3084,12 +3160,13 @@ pub mod apk {
                 pub fn add_attribute(&mut self, attr: Attribute<'a, 'a>) -> Result<()> {
                     if let Some(ns) = attr.namespace() {
                         if ns == "http://schemas.android.com/apk/res/android" {
-                            let entry = self.table.entry_by_ref(Ref::attr(attr.name()))?;
-                            self.attributes.insert(entry.id().into(), attr.name());
-                            if entry.attribute_type() == Some(ResAttributeType::String) {
-                                self.strings.insert(attr.value());
+                            if let Ok(entry) = self.table.entry_by_ref(Ref::attr(attr.name())) {
+                                self.attributes.insert(entry.id().into(), attr.name());
+                                if entry.attribute_type() == Some(ResAttributeType::String) {
+                                    self.strings.insert(attr.value());
+                                }
+                                return Ok(());
                             }
-                            return Ok(());
                         }
                     }
                     if attr.name() == "platformBuildVersionCode"
@@ -3674,6 +3751,91 @@ pub mod apk {
             }
         }
     }
+
+    fn ensure_android_jar(
+        root: &Path,
+        target_sdk: u32,
+        override_path: Option<PathBuf>,
+    ) -> Result<PathBuf> {
+        if let Some(mut path) = override_path {
+            if !path.is_absolute() {
+                path = root.join(path);
+            }
+            if !path.exists() {
+                bail!("android.jar not found at `{}`", path.display());
+            }
+            ensure_android_jar_has_resources(&path)?;
+            return Ok(path);
+        }
+
+        if let Ok(env_path) = env::var("ANDROID_JAR") {
+            let path = PathBuf::from(env_path);
+            if !path.exists() {
+                bail!("ANDROID_JAR points to missing file `{}`", path.display());
+            }
+            ensure_android_jar_has_resources(&path)?;
+            return Ok(path);
+        }
+
+        if let Ok(android_home) = env::var("ANDROID_HOME") {
+            let platforms = Path::new(&android_home).join("platforms");
+            if platforms.exists() {
+                let target_dir = platforms.join(format!("android-{}", target_sdk));
+                let candidate = target_dir.join("android.jar");
+                if candidate.exists() {
+                    ensure_android_jar_has_resources(&candidate)?;
+                    return Ok(candidate);
+                }
+                let mut candidates = vec![];
+                for entry in fs::read_dir(&platforms)? {
+                    let entry = entry?;
+                    let candidate = entry.path().join("android.jar");
+                    if candidate.exists() {
+                        candidates.push(candidate);
+                    }
+                }
+                candidates.sort();
+                if let Some(candidate) = candidates.pop() {
+                    ensure_android_jar_has_resources(&candidate)?;
+                    return Ok(candidate);
+                }
+            }
+        }
+
+        let sdk_dir = root.join(".cache").join("Android.sdk");
+        let jar_path = sdk_dir
+            .join("platforms")
+            .join(format!("android-{}", target_sdk))
+            .join("android.jar");
+        if jar_path.exists() {
+            ensure_android_jar_has_resources(&jar_path)?;
+            return Ok(jar_path);
+        }
+
+        download_android_jar(&sdk_dir, target_sdk)?;
+        ensure_android_jar_has_resources(&jar_path)?;
+        Ok(jar_path)
+    }
+
+    fn ensure_android_jar_has_resources(path: &Path) -> Result<()> {
+        let file = File::open(path)?;
+        let mut archive = ZipArchive::new(file)?;
+        archive
+            .by_name("resources.arsc")
+            .with_context(|| format!("`{}` missing resources.arsc", path.display()))?;
+        Ok(())
+    }
+
+    fn download_android_jar(sdk_dir: &Path, target_sdk: u32) -> Result<()> {
+        let package = format!("platforms;android-{}", target_sdk);
+        android_sdkmanager::download_and_extract_packages(
+            sdk_dir.to_str().context("Invalid SDK path")?,
+            android_sdkmanager::HostOs::Linux,
+            &[&package],
+            Some(&[android_sdkmanager::MatchType::EntireName("android.jar")]),
+        );
+        Ok(())
+    }
 }
 
 #[cfg(not(target_os = "android"))]
@@ -3685,5 +3847,8 @@ fn main() {
 
 #[cfg(target_os = "android")]
 fn main() {
-    apk::build();
+    if let Err(err) = apk::build() {
+        eprintln!("{err:?}");
+        std::process::exit(1);
+    }
 }

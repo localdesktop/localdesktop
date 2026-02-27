@@ -4,7 +4,7 @@ use crate::{
         app::build::PolarBearBackend,
         backend::{
             wayland::{Compositor, WaylandBackend},
-            webview::{ErrorVariant, WebviewBackend},
+            webview::WebviewBackend,
         },
         utils::application_context::get_application_context,
         utils::ndk::run_in_jvm,
@@ -19,15 +19,18 @@ use jni::sys::_jobject;
 use pathdiff::diff_paths;
 use smithay::utils::Clock;
 use std::{
+    ffi::CString,
     fs::{self, File},
     io::{Read, Write},
     os::unix::fs::{symlink, PermissionsExt},
-    path::Path,
+    path::{Path, PathBuf},
     sync::{
+        atomic::{AtomicBool, Ordering},
         mpsc::{self, Sender},
         Arc, Mutex,
     },
     thread::{self, JoinHandle},
+    time::{Duration, SystemTime},
 };
 use tar::Archive;
 use winit::platform::android::activity::AndroidApp;
@@ -54,12 +57,84 @@ type SetupStage = Box<dyn Fn(&SetupOptions) -> StageOutput + Send>;
 /// Otherwise, it should return a `JoinHandle`, so that the setup process can wait for the task to finish, but not block the main thread so that the setup progress can be reported to the user.
 type StageOutput = Option<JoinHandle<()>>;
 
+fn try_copy_arch_fs_from_apk_asset(
+    android_app: &AndroidApp,
+    temp_file: &Path,
+    mpsc_sender: &Sender<SetupMessage>,
+) -> Result<bool, String> {
+    const APK_ARCH_FS_ASSET: &str = "archlinux-fs.tar.xz";
+
+    let asset_name = CString::new(APK_ARCH_FS_ASSET).map_err(|e| format!("bad asset name: {e}"))?;
+    let asset_manager = android_app.asset_manager();
+    let Some(mut asset) = asset_manager.open(&asset_name) else {
+        return Ok(false);
+    };
+
+    let total_size = asset.length() as u64;
+    let part_file = temp_file.with_extension("tar.xz.part");
+    if let Some(parent) = part_file.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let _ = fs::remove_file(&part_file);
+
+    log::info!(
+        "Setup: found bundled Arch Linux FS asset in APK: {} ({} bytes)",
+        APK_ARCH_FS_ASSET,
+        total_size
+    );
+    let _ = mpsc_sender.send(SetupMessage::Progress(
+        "Copying bundled Arch Linux FS from APK...".to_string(),
+    ));
+
+    let mut out = File::create(&part_file)
+        .map_err(|e| format!("failed to create APK asset temp file: {e}"))?;
+    let mut copied = 0u64;
+    let mut last_percent = 0u8;
+    let mut buf = [0u8; 64 * 1024];
+    loop {
+        let n = asset
+            .read(&mut buf)
+            .map_err(|e| format!("failed reading APK asset: {e}"))?;
+        if n == 0 {
+            break;
+        }
+        out.write_all(&buf[..n])
+            .map_err(|e| format!("failed writing APK asset temp file: {e}"))?;
+        copied += n as u64;
+        if total_size > 0 {
+            let percent = (copied * 100 / total_size).min(100) as u8;
+            if percent != last_percent {
+                let copied_mb = copied as f64 / 1024.0 / 1024.0;
+                let total_mb = total_size as f64 / 1024.0 / 1024.0;
+                let _ = mpsc_sender.send(SetupMessage::Progress(format!(
+                    "Copying bundled Arch Linux FS from APK... {}% ({:.2} MB / {:.2} MB)",
+                    percent, copied_mb, total_mb
+                )));
+                last_percent = percent;
+            }
+        }
+    }
+    out.flush()
+        .map_err(|e| format!("failed flushing APK asset temp file: {e}"))?;
+
+    let _ = fs::remove_file(temp_file);
+    fs::rename(&part_file, temp_file)
+        .map_err(|e| format!("failed finalizing APK asset copy: {e}"))?;
+    log::info!(
+        "Setup: copied bundled Arch Linux FS asset to {} ({} bytes)",
+        temp_file.display(),
+        copied
+    );
+    Ok(true)
+}
+
 fn setup_arch_fs(options: &SetupOptions) -> StageOutput {
     let context = get_application_context();
     let temp_file = context.data_dir.join("archlinux-fs.tar.xz");
     let fs_root = Path::new(ARCH_FS_ROOT);
     let extracted_dir = context.data_dir.join("archlinux-aarch64");
     let mpsc_sender = options.mpsc_sender.clone();
+    let android_app = options.android_app.clone();
 
     // Only run if the fs_root is missing or empty
     // TODO: Setup integration test to make sure on clean install, the fs_root is either non existent or empty
@@ -67,7 +142,24 @@ fn setup_arch_fs(options: &SetupOptions) -> StageOutput {
     if need_setup {
         return Some(thread::spawn(move || {
             // Download if the archive doesn't exist
+            let mut download_retry_streak: u32 = 0;
             loop {
+                if !temp_file.exists() {
+                    match try_copy_arch_fs_from_apk_asset(&android_app, &temp_file, &mpsc_sender) {
+                        Ok(true) => {
+                            download_retry_streak = 0;
+                        }
+                        Ok(false) => {}
+                        Err(e) => {
+                            log::warn!("Setup: bundled Arch Linux FS asset copy failed: {}", e);
+                            let _ = fs::remove_file(&temp_file);
+                            let _ = mpsc_sender.send(SetupMessage::Error(format!(
+                                "Bundled Arch Linux FS copy failed (falling back to download): {e}"
+                            )));
+                        }
+                    }
+                }
+
                 if !temp_file.exists() {
                     mpsc_sender
                         .send(SetupMessage::Progress(
@@ -75,43 +167,86 @@ fn setup_arch_fs(options: &SetupOptions) -> StageOutput {
                         ))
                         .pb_expect("Failed to send log message");
 
-                    let response = reqwest::blocking::get(ARCH_FS_ARCHIVE)
-                        .pb_expect("Failed to download Arch Linux FS");
+                    let download_result: Result<(), String> = (|| {
+                        log::info!(
+                            "Setup: starting Arch Linux FS download: {}",
+                            ARCH_FS_ARCHIVE
+                        );
+                        let client = reqwest::blocking::Client::builder()
+                            .connect_timeout(Duration::from_secs(20))
+                            .timeout(Duration::from_secs(600))
+                            .http1_only()
+                            .build()
+                            .map_err(|e| format!("failed to build HTTP client: {e}"))?;
 
-                    let total_size = response.content_length().unwrap_or(0);
-                    let mut file = File::create(&temp_file)
-                        .pb_expect("Failed to create temp file for Arch Linux FS");
+                        let response = client
+                            .get(ARCH_FS_ARCHIVE)
+                            .send()
+                            .map_err(|e| format!("request failed: {e:?}"))?
+                            .error_for_status()
+                            .map_err(|e| format!("bad HTTP status: {e}"))?;
 
-                    let mut downloaded = 0u64;
-                    let mut buffer = [0u8; 8192];
-                    let mut reader = response;
-                    let mut last_percent = 0;
+                        let total_size = response.content_length().unwrap_or(0);
+                        log::info!(
+                            "Setup: Arch Linux FS response received ({} bytes)",
+                            total_size
+                        );
+                        let mut file = File::create(&temp_file)
+                            .map_err(|e| format!("failed to create temp file: {e}"))?;
 
-                    loop {
-                        let n = reader
-                            .read(&mut buffer)
-                            .pb_expect("Failed to read from response");
-                        if n == 0 {
-                            break;
-                        }
-                        file.write_all(&buffer[..n])
-                            .pb_expect("Failed to write to file");
-                        downloaded += n as u64;
-                        if total_size > 0 {
-                            let percent = (downloaded * 100 / total_size).min(100) as u8;
-                            if percent != last_percent {
-                                let downloaded_mb = downloaded as f64 / 1024.0 / 1024.0;
-                                let total_mb = total_size as f64 / 1024.0 / 1024.0;
-                                mpsc_sender
-                                    .send(SetupMessage::Progress(format!(
-                                        "Downloading Arch Linux FS... {}% ({:.2} MB / {:.2} MB)",
-                                        percent, downloaded_mb, total_mb
-                                    )))
-                                    .unwrap_or(());
-                                last_percent = percent;
+                        let mut downloaded = 0u64;
+                        let mut buffer = [0u8; 8192];
+                        let mut reader = response;
+                        let mut last_percent = 0;
+
+                        loop {
+                            let n = reader
+                                .read(&mut buffer)
+                                .map_err(|e| format!("failed to read from response: {e:?}"))?;
+                            if n == 0 {
+                                break;
+                            }
+                            file.write_all(&buffer[..n])
+                                .map_err(|e| format!("failed to write archive file: {e}"))?;
+                            downloaded += n as u64;
+                            if total_size > 0 {
+                                let percent = (downloaded * 100 / total_size).min(100) as u8;
+                                if percent != last_percent {
+                                    let downloaded_mb = downloaded as f64 / 1024.0 / 1024.0;
+                                    let total_mb = total_size as f64 / 1024.0 / 1024.0;
+                                    mpsc_sender
+                                        .send(SetupMessage::Progress(format!(
+                                            "Downloading Arch Linux FS... {}% ({:.2} MB / {:.2} MB)",
+                                            percent, downloaded_mb, total_mb
+                                        )))
+                                        .unwrap_or(());
+                                    last_percent = percent;
+                                }
                             }
                         }
+
+                        file.flush()
+                            .map_err(|e| format!("failed to flush archive file: {e}"))?;
+                        Ok(())
+                    })();
+
+                    if let Err(e) = download_result {
+                        download_retry_streak = download_retry_streak.saturating_add(1);
+                        let backoff_secs =
+                            std::cmp::min(60, 2u64.pow(std::cmp::min(download_retry_streak, 5)));
+                        log::warn!("Setup: Arch Linux FS download failed, retrying: {}", e);
+                        let _ = fs::remove_file(&temp_file);
+                        mpsc_sender
+                            .send(SetupMessage::Error(format!(
+                                "Failed to download Arch Linux FS: {}. Restarting download in {}s...",
+                                e, backoff_secs
+                            )))
+                            .unwrap_or(());
+                        thread::sleep(Duration::from_secs(backoff_secs));
+                        continue;
                     }
+
+                    download_retry_streak = 0;
                 }
 
                 mpsc_sender
@@ -119,6 +254,7 @@ fn setup_arch_fs(options: &SetupOptions) -> StageOutput {
                         "Extracting Arch Linux FS...".to_string(),
                     ))
                     .pb_expect("Failed to send log message");
+                log::info!("Setup: extracting Arch Linux FS");
 
                 // Ensure the extracted directory is clean
                 let _ = fs::remove_dir_all(&extracted_dir);
@@ -131,6 +267,7 @@ fn setup_arch_fs(options: &SetupOptions) -> StageOutput {
 
                 // Try to extract, if it fails, remove temp file and restart download
                 if let Err(e) = archive.unpack(context.data_dir.clone()) {
+                    log::warn!("Setup: Arch Linux FS extraction failed, retrying: {}", e);
                     // Clean up the failed extraction
                     let _ = fs::remove_dir_all(&extracted_dir);
                     let _ = fs::remove_file(&temp_file);
@@ -224,11 +361,14 @@ fn install_dependencies(options: &SetupOptions) -> StageOutput {
         launch: _,
     } = context.local_config.command;
 
+    let check_command = check.clone();
     let installed = move || {
-        ArchProcess::exec(&check)
-            .wait()
-            .pb_expect("Failed to check whether the installation target is installed")
-            .success()
+        ArchProcess {
+            command: check_command.clone(),
+            user: None,
+            log: None,
+        }
+        .run()
     };
 
     if installed() {
@@ -237,19 +377,165 @@ fn install_dependencies(options: &SetupOptions) -> StageOutput {
 
     let mpsc_sender = mpsc_sender.clone();
     return Some(thread::spawn(move || {
-        // Install dependencies until `check` succeed
+        // Install dependencies until `check` succeeds, but don't loop forever: if pacman/network
+        // is broken on first boot, we want a clear error instead of an apparent hang.
+        let max_attempts: u32 = 2;
+        let mut attempt: u32 = 0;
         loop {
-            ArchProcess::exec_with_panic_on_error("rm -f /var/lib/pacman/db.lck");
-            ArchProcess::exec(&install).with_log(|it| {
-                mpsc_sender
-                    .send(SetupMessage::Progress(it))
-                    .pb_expect("Failed to send log message");
+            attempt += 1;
+
+            let _ = mpsc_sender.send(SetupMessage::Progress(format!(
+                "Installing dependencies (attempt {}/{})...",
+                attempt, max_attempts
+            )));
+
+            ArchProcess {
+                command: "rm -f /var/lib/pacman/db.lck".to_string(),
+                user: None,
+                log: None,
+            }
+            .run();
+            let promote_stop = Arc::new(AtomicBool::new(false));
+            let promote_stop_bg = promote_stop.clone();
+            let promote_log_sender = mpsc_sender.clone();
+            let promote_handle = thread::spawn(move || {
+                let mut announced = false;
+                while !promote_stop_bg.load(Ordering::Relaxed) {
+                    let promoted = promote_latest_pacman_sync_downloads();
+                    if promoted > 0 && !announced {
+                        announced = true;
+                        let _ = promote_log_sender.send(SetupMessage::Progress(
+                            "Promoting pacman sync db files from download cache (rootless fallback)..."
+                                .to_string(),
+                        ));
+                    }
+                    thread::sleep(Duration::from_millis(250));
+                }
             });
-            if installed() {
+            let log_sender = mpsc_sender.clone();
+            let code = ArchProcess {
+                command: install.clone(),
+                user: None,
+                log: Some(Arc::new(move |it| {
+                    log_sender
+                        .send(SetupMessage::Progress(it))
+                        .pb_expect("Failed to send log message");
+                })),
+            }
+            .run_code();
+            promote_stop.store(true, Ordering::Relaxed);
+            let _ = promote_handle.join();
+
+            if code == 0 && installed() {
                 break;
             }
+
+            let promoted = promote_latest_pacman_sync_downloads();
+            if promoted > 0 {
+                let _ = mpsc_sender.send(SetupMessage::Progress(format!(
+                    "Promoted {promoted} pacman sync db files from download cache (rootless fallback)."
+                )));
+            }
+
+            if attempt >= max_attempts {
+                let _ = mpsc_sender.send(SetupMessage::Error(format!(
+                    "Dependency installation failed after {} attempts (last exit code {}).",
+                    attempt, code
+                )));
+                panic!(
+                    "install_dependencies: failed after {} attempts (last exit code {})",
+                    attempt, code
+                );
+            }
+
+            thread::sleep(Duration::from_secs(2));
         }
     }));
+}
+
+fn ensure_pacman_mirrorlist(_: &SetupOptions) -> StageOutput {
+    let fs_root = Path::new(ARCH_FS_ROOT);
+    let mirrorlist = fs_root.join("etc/pacman.d/mirrorlist");
+    let missing_or_empty = mirrorlist
+        .metadata()
+        .map_or(true, |m| !m.is_file() || m.len() == 0);
+    if !missing_or_empty {
+        return None;
+    }
+
+    Some(thread::spawn(move || {
+        let _ = fs::create_dir_all(fs_root.join("etc/pacman.d"));
+        let contents = "\
+## Auto-generated by Local Desktop setup.
+## Keep this file writable so first-run setup can recover from missing rootfs mirrorlists.
+Server = https://mirror.archlinuxarm.org/$arch/$repo
+Server = https://tw.mirror.archlinuxarm.org/$arch/$repo
+Server = https://de.mirror.archlinuxarm.org/$arch/$repo
+";
+        fs::write(&mirrorlist, contents).pb_expect("Failed to write pacman mirrorlist");
+        #[cfg(unix)]
+        {
+            let _ = fs::set_permissions(&mirrorlist, fs::Permissions::from_mode(0o644));
+        }
+        log::info!(
+            "Setup: created missing pacman mirrorlist at {}",
+            mirrorlist.display()
+        );
+    }))
+}
+
+fn promote_latest_pacman_sync_downloads() -> usize {
+    let sync_dir = Path::new(ARCH_FS_ROOT).join("var/lib/pacman/sync");
+    let Ok(entries) = fs::read_dir(&sync_dir) else {
+        return 0;
+    };
+
+    let mut newest_download_dir: Option<(SystemTime, PathBuf)> = None;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if !name.starts_with("download-") {
+            continue;
+        }
+        let Ok(meta) = entry.metadata() else {
+            continue;
+        };
+        if !meta.is_dir() {
+            continue;
+        }
+        let modified = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+        if newest_download_dir
+            .as_ref()
+            .is_none_or(|(current, _)| modified > *current)
+        {
+            newest_download_dir = Some((modified, path));
+        }
+    }
+
+    let Some((_, download_dir)) = newest_download_dir else {
+        return 0;
+    };
+
+    let mut copied = 0usize;
+    for stem in ["core", "extra", "alarm", "aur"] {
+        for suffix in [".db", ".db.sig"] {
+            let filename = format!("{stem}{suffix}");
+            let src = download_dir.join(&filename);
+            let dst = sync_dir.join(&filename);
+            let Ok(meta) = fs::metadata(&src) else {
+                continue;
+            };
+            if !meta.is_file() || meta.len() == 0 {
+                continue;
+            }
+            if fs::copy(&src, &dst).is_ok() {
+                copied += 1;
+            }
+        }
+    }
+
+    copied
 }
 
 fn setup_firefox_config(_: &SetupOptions) -> StageOutput {
@@ -707,20 +993,6 @@ pub fn setup(android_app: AndroidApp) -> PolarBearBackend {
     let (sender, receiver) = mpsc::channel();
     let progress = Arc::new(Mutex::new(0));
 
-    if ArchProcess::is_supported() {
-        sender
-            .send(SetupMessage::Progress(
-                "✅ Your device is supported!".to_string(),
-            ))
-            .unwrap_or(());
-    } else {
-        return PolarBearBackend::WebView(WebviewBackend {
-            socket_port: 0,
-            progress,
-            error: ErrorVariant::Unsupported,
-        });
-    }
-
     let options = SetupOptions {
         android_app,
         mpsc_sender: sender.clone(),
@@ -729,10 +1001,11 @@ pub fn setup(android_app: AndroidApp) -> PolarBearBackend {
     let stages: Vec<SetupStage> = vec![
         Box::new(setup_arch_fs),                // Step 1. Setup Arch FS (extract)
         Box::new(simulate_linux_sysdata_stage), // Step 2. Simulate Linux system data
-        Box::new(install_dependencies),         // Step 3. Install dependencies
-        Box::new(setup_firefox_config),         // Step 4. Setup Firefox config
-        Box::new(setup_lxqt_scaling),           // Step 5. Setup LXQt HiDPI scaling
-        Box::new(fix_xkb_symlink),              // Step 6. Fix xkb symlink (last)
+        Box::new(ensure_pacman_mirrorlist),     // Step 3. Ensure pacman mirrorlist exists
+        Box::new(install_dependencies),         // Step 4. Install dependencies
+        Box::new(setup_firefox_config),         // Step 5. Setup Firefox config
+        Box::new(setup_lxqt_scaling),           // Step 6. Setup LXQt HiDPI scaling
+        Box::new(fix_xkb_symlink),              // Step 7. Fix xkb symlink (last)
     ];
 
     let handle_stage_error = |e: Box<dyn std::any::Any + Send>, sender: &Sender<SetupMessage>| {
@@ -782,11 +1055,13 @@ pub fn setup(android_app: AndroidApp) -> PolarBearBackend {
                     // All stages are done, we need to replace the WebviewBackend with the WaylandBackend
                     // Or, easier, just restart the whole app
                     *progress.lock().unwrap() = 100;
+                    log::info!("Setup progress reached 100%");
                     sender_clone
                         .send(SetupMessage::Progress(
                             "Installation finished, please restart the app".to_string(),
                         ))
                         .pb_expect("Failed to send installation finished message");
+                    log::info!("Setup complete: Installation finished, please restart the app");
                 });
 
                 // Setup is still running in the background, but we need to return control

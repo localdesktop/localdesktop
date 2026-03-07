@@ -20,7 +20,7 @@ use pathdiff::diff_paths;
 use smithay::utils::Clock;
 use std::{
     fs::{self, File},
-    io::{Read, Write},
+    io::{self, Read, Write},
     os::unix::fs::{symlink, PermissionsExt},
     path::Path,
     sync::{
@@ -47,14 +47,133 @@ pub struct SetupOptions {
 /// Setup is a process that should be done **only once** when the user installed the app.
 /// The setup process consists of several stages.
 /// Each stage is a function that takes the `SetupOptions` and returns a `StageOutput`.
-type SetupStage = Box<dyn Fn(&SetupOptions) -> StageOutput + Send>;
+type SetupStageRunner = fn(&SetupOptions, StageProgress) -> StageOutput;
 
 /// Each stage should indicate whether the associated task is done previously or not.
 /// Thus, it should return a finished status if the task is done, so that the setup process can move on to the next stage.
 /// Otherwise, it should return a `JoinHandle`, so that the setup process can wait for the task to finish, but not block the main thread so that the setup progress can be reported to the user.
 type StageOutput = Option<JoinHandle<()>>;
 
-fn setup_arch_fs(options: &SetupOptions) -> StageOutput {
+struct SetupStage {
+    run: SetupStageRunner,
+    start: u16,
+    end: u16,
+}
+
+#[derive(Clone)]
+struct StageProgress {
+    progress: Arc<Mutex<u16>>,
+    start: u16,
+    end: u16,
+}
+
+impl StageProgress {
+    fn new(progress: Arc<Mutex<u16>>, start: u16, end: u16) -> Self {
+        Self {
+            progress,
+            start: start.min(100),
+            end: end.min(100),
+        }
+    }
+
+    fn begin(&self) {
+        self.set_absolute(self.start);
+    }
+
+    fn complete(&self) {
+        self.set_absolute(self.end);
+    }
+
+    fn set_stage_basis_points(&self, basis_points: u16) {
+        let span = self.end.saturating_sub(self.start) as u32;
+        let basis_points = basis_points.min(10_000) as u32;
+        let value = self.start as u32 + span * basis_points / 10_000;
+        self.set_absolute(value as u16);
+    }
+
+    fn set_substage_fraction(
+        &self,
+        substage_start_basis_points: u16,
+        substage_end_basis_points: u16,
+        current: u64,
+        total: u64,
+    ) {
+        if total == 0 {
+            return;
+        }
+
+        let substage_start_basis_points = substage_start_basis_points.min(10_000);
+        let substage_end_basis_points = substage_end_basis_points
+            .min(10_000)
+            .max(substage_start_basis_points);
+        let span = (substage_end_basis_points - substage_start_basis_points) as u64;
+        let current = current.min(total);
+        let basis_points = substage_start_basis_points as u64 + current * span / total.max(1);
+        self.set_stage_basis_points(basis_points as u16);
+    }
+
+    fn set_absolute(&self, value: u16) {
+        *self.progress.lock().unwrap() = value.min(100);
+    }
+}
+
+struct ProgressReader<R> {
+    inner: R,
+    bytes_read: u64,
+    on_progress: Box<dyn FnMut(u64) + Send>,
+}
+
+impl<R> ProgressReader<R> {
+    fn new(inner: R, on_progress: Box<dyn FnMut(u64) + Send>) -> Self {
+        Self {
+            inner,
+            bytes_read: 0,
+            on_progress,
+        }
+    }
+}
+
+impl<R: Read> Read for ProgressReader<R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let read = self.inner.read(buf)?;
+        if read > 0 {
+            self.bytes_read += read as u64;
+            (self.on_progress)(self.bytes_read);
+        }
+        Ok(read)
+    }
+}
+
+fn parse_pacman_progress_line(line: &str) -> Option<(u64, u64)> {
+    let line = line.trim_start();
+    let line = line.strip_prefix('(')?;
+    let (current, rest) = line.split_once('/')?;
+    let current = current.trim().parse::<u64>().ok()?;
+    let total_end = rest.find(')')?;
+    let total = rest[..total_end].trim().parse::<u64>().ok()?;
+    let action = rest[total_end + 1..].trim_start();
+
+    if current == 0 || total == 0 {
+        return None;
+    }
+
+    let is_package_action = [
+        "installing ",
+        "upgrading ",
+        "reinstalling ",
+        "downgrading ",
+        "removing ",
+    ]
+    .iter()
+    .any(|prefix| action.starts_with(prefix));
+    if !is_package_action {
+        return None;
+    }
+
+    Some((current.min(total), total))
+}
+
+fn setup_arch_fs(options: &SetupOptions, stage_progress: StageProgress) -> StageOutput {
     let context = get_application_context();
     let temp_file = context.data_dir.join("archlinux-fs.tar.xz");
     let fs_root = Path::new(ARCH_FS_ROOT);
@@ -66,6 +185,9 @@ fn setup_arch_fs(options: &SetupOptions) -> StageOutput {
     let need_setup = fs_root.read_dir().map_or(true, |mut d| d.next().is_none());
     if need_setup {
         return Some(thread::spawn(move || {
+            const DOWNLOAD_END_BASIS_POINTS: u16 = 5_500;
+            const EXTRACT_END_BASIS_POINTS: u16 = 9_500;
+
             // Download if the archive doesn't exist
             loop {
                 if !temp_file.exists() {
@@ -100,6 +222,12 @@ fn setup_arch_fs(options: &SetupOptions) -> StageOutput {
                         if total_size > 0 {
                             let percent = (downloaded * 100 / total_size).min(100) as u8;
                             if percent != last_percent {
+                                stage_progress.set_substage_fraction(
+                                    0,
+                                    DOWNLOAD_END_BASIS_POINTS,
+                                    downloaded,
+                                    total_size,
+                                );
                                 let downloaded_mb = downloaded as f64 / 1024.0 / 1024.0;
                                 let total_mb = total_size as f64 / 1024.0 / 1024.0;
                                 mpsc_sender
@@ -114,6 +242,7 @@ fn setup_arch_fs(options: &SetupOptions) -> StageOutput {
                     }
                 }
 
+                stage_progress.set_stage_basis_points(DOWNLOAD_END_BASIS_POINTS);
                 mpsc_sender
                     .send(SetupMessage::Progress(
                         "Extracting Arch Linux FS...".to_string(),
@@ -126,7 +255,20 @@ fn setup_arch_fs(options: &SetupOptions) -> StageOutput {
                 // Extract tar file directly to the final destination
                 let tar_file = File::open(&temp_file)
                     .pb_expect("Failed to open downloaded Arch Linux FS file");
-                let tar = XzDecoder::new(tar_file);
+                let compressed_size = tar_file.metadata().map(|meta| meta.len()).unwrap_or(0);
+                let extract_progress = stage_progress.clone();
+                let tracked_tar_file = ProgressReader::new(
+                    tar_file,
+                    Box::new(move |bytes_read| {
+                        extract_progress.set_substage_fraction(
+                            DOWNLOAD_END_BASIS_POINTS,
+                            EXTRACT_END_BASIS_POINTS,
+                            bytes_read,
+                            compressed_size,
+                        );
+                    }),
+                );
+                let tar = XzDecoder::new(tracked_tar_file);
                 let mut archive = Archive::new(tar);
 
                 // Try to extract, if it fails, remove temp file and restart download
@@ -150,6 +292,7 @@ fn setup_arch_fs(options: &SetupOptions) -> StageOutput {
                 break;
             }
 
+            stage_progress.set_stage_basis_points(EXTRACT_END_BASIS_POINTS);
             // Move the extracted files to the final destination
             fs::rename(&extracted_dir, fs_root)
                 .pb_expect("Failed to rename extracted files to final destination");
@@ -161,7 +304,10 @@ fn setup_arch_fs(options: &SetupOptions) -> StageOutput {
     None
 }
 
-fn simulate_linux_sysdata_stage(options: &SetupOptions) -> StageOutput {
+fn simulate_linux_sysdata_stage(
+    options: &SetupOptions,
+    _stage_progress: StageProgress,
+) -> StageOutput {
     let fs_root = Path::new(ARCH_FS_ROOT);
     let mpsc_sender = options.mpsc_sender.clone();
 
@@ -211,7 +357,7 @@ fn simulate_linux_sysdata_stage(options: &SetupOptions) -> StageOutput {
     None
 }
 
-fn install_dependencies(options: &SetupOptions) -> StageOutput {
+fn install_dependencies(options: &SetupOptions, stage_progress: StageProgress) -> StageOutput {
     let SetupOptions {
         mpsc_sender,
         android_app: _,
@@ -225,10 +371,14 @@ fn install_dependencies(options: &SetupOptions) -> StageOutput {
     } = context.local_config.command;
 
     let installed = move || {
-        ArchProcess { command: check.clone(), user: None, log: None }
-            .run()
-            .status
-            .success()
+        ArchProcess {
+            command: check.clone(),
+            user: None,
+            log: None,
+        }
+        .run()
+        .status
+        .success()
     };
 
     if installed() {
@@ -238,21 +388,46 @@ fn install_dependencies(options: &SetupOptions) -> StageOutput {
     let mpsc_sender = mpsc_sender.clone();
     return Some(thread::spawn(move || {
         const MAX_INSTALL_ATTEMPTS: usize = 10;
+        const PACKAGE_PROGRESS_START_BASIS_POINTS: u16 = 1_000;
+        const PACKAGE_PROGRESS_END_BASIS_POINTS: u16 = 9_500;
 
         // Install dependencies until `check` succeeds.
         for attempt in 1..=MAX_INSTALL_ATTEMPTS {
-            let output = ArchProcess { command: "rm -f /var/lib/pacman/db.lck".into(), user: None, log: None }.run();
-            assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+            let attempt_progress = ((attempt - 1) as u16 * PACKAGE_PROGRESS_START_BASIS_POINTS)
+                / MAX_INSTALL_ATTEMPTS as u16;
+            stage_progress.set_stage_basis_points(attempt_progress);
+
+            let output = ArchProcess {
+                command: "rm -f /var/lib/pacman/db.lck".into(),
+                user: None,
+                log: None,
+            }
+            .run();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
             let sender = mpsc_sender.clone();
+            let stage_progress = stage_progress.clone();
             ArchProcess {
                 command: install.clone(),
                 user: None,
                 log: Some(Arc::new(move |it| {
+                    if let Some((current, total)) = parse_pacman_progress_line(&it) {
+                        stage_progress.set_substage_fraction(
+                            PACKAGE_PROGRESS_START_BASIS_POINTS,
+                            PACKAGE_PROGRESS_END_BASIS_POINTS,
+                            current,
+                            total,
+                        );
+                    }
                     sender
                         .send(SetupMessage::Progress(it))
                         .pb_expect("Failed to send log message");
                 })),
-            }.run();
+            }
+            .run();
 
             if installed() {
                 return;
@@ -278,7 +453,7 @@ fn install_dependencies(options: &SetupOptions) -> StageOutput {
     }));
 }
 
-fn setup_firefox_config(_: &SetupOptions) -> StageOutput {
+fn setup_firefox_config(_: &SetupOptions, _stage_progress: StageProgress) -> StageOutput {
     // Create the Firefox root directory if it doesn't exist
     let firefox_root = format!("{}/usr/lib/firefox", ARCH_FS_ROOT);
     let _ = fs::create_dir_all(&firefox_root).pb_expect("Failed to create Firefox root directory");
@@ -597,7 +772,7 @@ fn update_openbox_theme(fs_root: &Path, theme_name: &str, scale: i32) {
     fs::write(&user_theme, content).pb_expect("Failed to write openbox theme file");
 }
 
-fn setup_lxqt_scaling(options: &SetupOptions) -> StageOutput {
+fn setup_lxqt_scaling(options: &SetupOptions, _stage_progress: StageProgress) -> StageOutput {
     let fs_root = Path::new(ARCH_FS_ROOT);
     let android_app = options.android_app.clone();
 
@@ -704,7 +879,7 @@ Hidden=true
     None
 }
 
-fn fix_xkb_symlink(options: &SetupOptions) -> StageOutput {
+fn fix_xkb_symlink(options: &SetupOptions, _stage_progress: StageProgress) -> StageOutput {
     let fs_root = Path::new(ARCH_FS_ROOT);
     let xkb_path = fs_root.join("usr/share/X11/xkb");
     let mpsc_sender = options.mpsc_sender.clone();
@@ -772,12 +947,36 @@ pub fn setup(android_app: AndroidApp) -> PolarBearBackend {
     };
 
     let stages: Vec<SetupStage> = vec![
-        Box::new(setup_arch_fs),                // Step 1. Setup Arch FS (extract)
-        Box::new(simulate_linux_sysdata_stage), // Step 2. Simulate Linux system data
-        Box::new(install_dependencies),         // Step 3. Install dependencies
-        Box::new(setup_firefox_config),         // Step 4. Setup Firefox config
-        Box::new(setup_lxqt_scaling),           // Step 5. Setup LXQt HiDPI scaling
-        Box::new(fix_xkb_symlink),              // Step 6. Fix xkb symlink (last)
+        SetupStage {
+            run: setup_arch_fs,
+            start: 0,
+            end: 40,
+        },
+        SetupStage {
+            run: simulate_linux_sysdata_stage,
+            start: 40,
+            end: 45,
+        },
+        SetupStage {
+            run: install_dependencies,
+            start: 45,
+            end: 90,
+        },
+        SetupStage {
+            run: setup_firefox_config,
+            start: 90,
+            end: 94,
+        },
+        SetupStage {
+            run: setup_lxqt_scaling,
+            start: 94,
+            end: 98,
+        },
+        SetupStage {
+            run: fix_xkb_symlink,
+            start: 98,
+            end: 100,
+        },
     ];
 
     let handle_stage_error = |e: Box<dyn std::any::Any + Send>, sender: &Sender<SetupMessage>| {
@@ -795,40 +994,44 @@ pub fn setup(android_app: AndroidApp) -> PolarBearBackend {
 
     let fully_installed = 'outer: loop {
         for (i, stage) in stages.iter().enumerate() {
-            if let Some(handle) = stage(&options) {
+            let stage_progress = StageProgress::new(progress.clone(), stage.start, stage.end);
+            stage_progress.begin();
+
+            if let Some(handle) = (stage.run)(&options, stage_progress.clone()) {
                 let progress_clone = progress.clone();
                 let sender_clone = sender.clone();
                 thread::spawn(move || {
-                    let progress = progress_clone;
-                    let progress_value = ((i) as u16 * 100 / stages.len() as u16) as u16;
-                    *progress.lock().unwrap() = progress_value;
-
                     // Wait for the current stage to finish
                     if let Err(e) = handle.join() {
                         handle_stage_error(e, &sender_clone);
                         return;
                     }
+                    stage_progress.complete();
 
                     // Process the remaining stages in the same loop
-                    for (j, next_stage) in stages.iter().enumerate().skip(i + 1) {
-                        let progress_value = ((j) as u16 * 100 / stages.len() as u16) as u16;
-                        *progress.lock().unwrap() = progress_value;
-                        if let Some(next_handle) = next_stage(&options) {
+                    for next_stage in stages.iter().skip(i + 1) {
+                        let next_stage_progress = StageProgress::new(
+                            progress_clone.clone(),
+                            next_stage.start,
+                            next_stage.end,
+                        );
+                        next_stage_progress.begin();
+
+                        if let Some(next_handle) =
+                            (next_stage.run)(&options, next_stage_progress.clone())
+                        {
                             if let Err(e) = next_handle.join() {
                                 handle_stage_error(e, &sender_clone);
                                 return;
                             }
-
-                            // Increment progress and send it
-                            let next_progress_value =
-                                ((j + 1) as u16 * 100 / stages.len() as u16) as u16;
-                            *progress.lock().unwrap() = next_progress_value;
                         }
+
+                        next_stage_progress.complete();
                     }
 
                     // All stages are done, we need to replace the WebviewBackend with the WaylandBackend
                     // Or, easier, just restart the whole app
-                    *progress.lock().unwrap() = 100;
+                    *progress_clone.lock().unwrap() = 100;
                     sender_clone
                         .send(SetupMessage::Progress(
                             "Installation finished, please restart the app".to_string(),
@@ -840,6 +1043,8 @@ pub fn setup(android_app: AndroidApp) -> PolarBearBackend {
                 // so that the main thread can continue to report progress to the user
                 break 'outer false;
             }
+
+            stage_progress.complete();
         }
 
         // All stages were done previously, no need to wait for anything
@@ -856,5 +1061,43 @@ pub fn setup(android_app: AndroidApp) -> PolarBearBackend {
         })
     } else {
         PolarBearBackend::WebView(WebviewBackend::build(receiver, progress))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_pacman_progress_line, StageProgress};
+    use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn parse_pacman_progress_line_reads_current_and_total() {
+        assert_eq!(
+            parse_pacman_progress_line("(17/132) installing qt6-base"),
+            Some((17, 132))
+        );
+        assert_eq!(
+            parse_pacman_progress_line("  (9/9) upgrading qt6-base"),
+            Some((9, 9))
+        );
+        assert_eq!(
+            parse_pacman_progress_line("(1/9) checking keys in keyring"),
+            None
+        );
+        assert_eq!(
+            parse_pacman_progress_line("resolving dependencies..."),
+            None
+        );
+    }
+
+    #[test]
+    fn stage_progress_maps_fraction_into_absolute_percentage() {
+        let progress = Arc::new(Mutex::new(0));
+        let stage_progress = StageProgress::new(progress.clone(), 45, 90);
+
+        stage_progress.set_substage_fraction(0, 10_000, 1, 2);
+        assert_eq!(*progress.lock().unwrap(), 67);
+
+        stage_progress.complete();
+        assert_eq!(*progress.lock().unwrap(), 90);
     }
 }

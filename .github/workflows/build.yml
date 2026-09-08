@@ -33,6 +33,8 @@ jobs:
   validate-release-label:
     name: Validate Release Label
     runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
     outputs:
       should_build: ${{ steps.classify.outputs.should_build }}
 
@@ -48,6 +50,26 @@ jobs:
             }
 
             const pr = context.payload.pull_request;
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pr.number,
+              per_page: 100,
+            });
+
+            const ghPagesOnly =
+              files.length > 0 &&
+              files.every((file) =>
+                file.filename.startsWith("gh-pages/") &&
+                (!file.previous_filename || file.previous_filename.startsWith("gh-pages/"))
+              );
+
+            if (ghPagesOnly) {
+              core.info("Skipping release label validation and APK build for gh-pages-only PR.");
+              core.setOutput("should_build", "false");
+              return;
+            }
+
             const appReleaseLabels = new Set([
               "release:breaking",
               "release:feature",
